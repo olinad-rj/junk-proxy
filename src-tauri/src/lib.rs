@@ -6,10 +6,15 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
+
+static IS_EXITING: AtomicBool = AtomicBool::new(false);
 
 const MIXED_PORT: u16 = 7897;
 const CONTROLLER: &str = "127.0.0.1:9097";
@@ -679,11 +684,57 @@ fn check_unlock_sync(service_id: &str, via_proxy: bool) -> Result<Value, String>
     }))
 }
 
+fn show_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(AppState {
             scraper: Mutex::new(None),
             core: Mutex::new(None),
+        })
+        .setup(|app| {
+            let show_item = MenuItem::with_id(app, "show", "Abrir Junk Proxy", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            let mut tray_builder = TrayIconBuilder::new()
+                .menu(&menu)
+                .tooltip("Junk Proxy")
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app_handle, event| match event.id.as_ref() {
+                    "show" => show_main_window(app_handle),
+                    "quit" => {
+                        IS_EXITING.store(true, Ordering::SeqCst);
+                        let state = app_handle.state::<AppState>();
+                        let _ = apply_system_proxy(false);
+                        stop_child(&state.core);
+                        stop_child(&state.scraper);
+                        app_handle.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+            tray_builder.build(app)?;
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             scraper_status,
@@ -703,14 +754,28 @@ pub fn run() {
             check_unlock_service,
         ])
         .build(tauri::generate_context!())
-        .expect("erro ao construir ProxyLite");
+        .expect("erro ao construir Junk Proxy");
 
-    app.run(|app_handle, event| {
-        if let RunEvent::Exit = event {
+    app.run(|app_handle, event| match event {
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "main" && !IS_EXITING.load(Ordering::SeqCst) => {
+            api.prevent_close();
+            if let Some(w) = app_handle.get_webview_window("main") {
+                let _ = w.hide();
+            }
+        }
+        RunEvent::ExitRequested { api, .. } if !IS_EXITING.load(Ordering::SeqCst) => {
+            api.prevent_exit();
+        }
+        RunEvent::Exit => {
             let state = app_handle.state::<AppState>();
             let _ = apply_system_proxy(false);
             stop_child(&state.core);
             stop_child(&state.scraper);
         }
+        _ => {}
     });
 }

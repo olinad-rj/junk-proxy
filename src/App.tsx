@@ -13,6 +13,7 @@ import {
   HelpCircle,
   Home,
   Layers,
+  List,
   MapPin,
   Play,
   Plus,
@@ -86,7 +87,13 @@ interface UnlockResult {
   time?: string;
 }
 
-type Tab = "home" | "scraper" | "proxies" | "unlock";
+type Tab = "home" | "scraper" | "proxies" | "unlock" | "lists";
+
+interface ProxyList {
+  id: string;
+  name: string;
+  proxies: ScrapedProxy[];
+}
 
 const UNLOCK_SERVICES: { id: string; name: string }[] = [
   { id: "apple", name: "Apple" },
@@ -415,6 +422,18 @@ export default function App() {
   const pingBatchSizeRef = useRef(10);
   const batchPingAbortRef = useRef(false);
   const [savedProxies, setSavedProxies] = useState<ScrapedProxy[]>([]);
+  const [proxyLists, setProxyLists] = useState<ProxyList[]>(() => {
+    try {
+      const raw = localStorage.getItem("junk_proxy_lists");
+      return raw ? (JSON.parse(raw) as ProxyList[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activeListId, setActiveListId] = useState<string>("");
+  const [listMaxMs, setListMaxMs] = useState("500");
+  const [createListOpen, setCreateListOpen] = useState(false);
+  const [newListName, setNewListName] = useState("");
   const [customProxyInput, setCustomProxyInput] = useState("");
   const [customProxyProto, setCustomProxyProto] = useState<"http" | "socks5">("http");
   const [fallbackQueue, setFallbackQueue] = useState<ScrapedProxy[]>(() => {
@@ -787,6 +806,32 @@ export default function App() {
     }
   }, [fallbackQueue]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem("junk_proxy_lists", JSON.stringify(proxyLists));
+    } catch {
+      // ignore
+    }
+    if (proxyLists.length > 0 && !proxyLists.some((l) => l.id === activeListId)) {
+      setActiveListId(proxyLists[0].id);
+    }
+  }, [proxyLists, activeListId]);
+
+  const activeProxyList = useMemo(
+    () => proxyLists.find((l) => l.id === activeListId) ?? proxyLists[0] ?? null,
+    [proxyLists, activeListId]
+  );
+
+  const updateActiveListProxies = useCallback(
+    (updater: (prev: ScrapedProxy[]) => ScrapedProxy[]) => {
+      if (!activeProxyList) return;
+      setProxyLists((prev) =>
+        prev.map((l) => (l.id === activeProxyList.id ? { ...l, proxies: updater(l.proxies) } : l))
+      );
+    },
+    [activeProxyList]
+  );
+
   const savedSet = useMemo(() => new Set(savedProxies.map(pKey)), [savedProxies]);
 
   const saveProxies = useCallback(
@@ -1150,6 +1195,12 @@ export default function App() {
           onClick={() => setTab("unlock")}
         >
           <ShieldCheck size={16} /> Desbloqueio
+        </button>
+        <button
+          className={`nav-btn ${tab === "lists" ? "active" : ""}`}
+          onClick={() => setTab("lists")}
+        >
+          <List size={16} /> Lista de Proxies{proxyLists.length > 0 ? ` (${proxyLists.length})` : ""}
         </button>
 
         <div className="side-foot">
@@ -1643,6 +1694,17 @@ export default function App() {
                   >
                     <Bookmark size={14} />{" "}
                     {selected.length > 0 ? `Salvar (${selected.length})` : "Salvar Working"}
+                  </button>
+                  <button
+                    className="btn"
+                    disabled={selected.length === 0}
+                    onClick={() => {
+                      setNewListName(`Lista ${proxyLists.length + 1}`);
+                      setCreateListOpen(true);
+                    }}
+                    title="Criar uma nova lista em Lista de Proxies com os itens marcados"
+                  >
+                    <Plus size={14} /> Criar lista de selecionados ({selected.length})
                   </button>
                   <button
                     className="btn"
@@ -2386,7 +2448,292 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {tab === "lists" && (
+          <div className="content">
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <div className="row" style={{ gap: 8 }}>
+                  <List size={16} color="#60a5fa" />
+                  <b>Listas de Proxies</b>
+                  <select
+                    className="select"
+                    value={activeProxyList?.id || ""}
+                    onChange={(e) => setActiveListId(e.target.value)}
+                    disabled={proxyLists.length === 0}
+                  >
+                    {proxyLists.length === 0 ? (
+                      <option value="">Nenhuma lista criada</option>
+                    ) : (
+                      proxyLists.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name} ({l.proxies.length})
+                        </option>
+                      ))
+                    )}
+                  </select>
+                  {activeProxyList && (
+                    <button
+                      className="btn sm danger"
+                      onClick={() => {
+                        setProxyLists((prev) => prev.filter((l) => l.id !== activeProxyList.id));
+                        notify(`Lista "${activeProxyList.name}" removida`);
+                      }}
+                      title="Excluir lista atual"
+                    >
+                      <Trash2 size={12} /> Excluir Lista
+                    </button>
+                  )}
+                </div>
+                <div className="row" style={{ gap: 6 }}>
+                  <select
+                    className="select"
+                    value={pingBatchSize}
+                    disabled={!!batchPingProgress}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setPingBatchSize(v);
+                      pingBatchSizeRef.current = v;
+                    }}
+                  >
+                    <option value={10}>10 por vez</option>
+                    <option value={20}>20 por vez</option>
+                    <option value={30}>30 por vez</option>
+                    <option value={50}>50 por vez</option>
+                  </select>
+                  <button
+                    className={`btn ${batchPingProgress ? "danger" : "primary"}`}
+                    disabled={!batchPingProgress && (!activeProxyList || activeProxyList.proxies.length === 0)}
+                    onClick={() => {
+                      if (batchPingProgress) {
+                        batchPingAbortRef.current = true;
+                      } else if (activeProxyList) {
+                        void pingBatchReal(activeProxyList.proxies);
+                      }
+                    }}
+                  >
+                    <Zap size={14} />{" "}
+                    {batchPingProgress
+                      ? `Parar Ping (${batchPingProgress.done}/${batchPingProgress.total})`
+                      : "Ping Real"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <div className="row" style={{ gap: 6 }}>
+                  <button
+                    className="btn sm danger"
+                    disabled={!activeProxyList || activeProxyList.proxies.length === 0}
+                    onClick={() => {
+                      if (!activeProxyList) return;
+                      let removed = 0;
+                      updateActiveListProxies((prev) =>
+                        prev.filter((p) => {
+                          const fail = tcpPings[pKey(p)] === "timeout";
+                          if (fail) removed++;
+                          return !fail;
+                        })
+                      );
+                      notify(`${removed} proxy(s) que falharam apagado(s)`);
+                    }}
+                  >
+                    <Trash2 size={12} /> Apagar Falhos
+                  </button>
+                  <input
+                    className="input"
+                    style={{ width: 95 }}
+                    type="number"
+                    value={listMaxMs}
+                    onChange={(e) => setListMaxMs(e.target.value)}
+                    placeholder="Máx ms"
+                    title="Limite em ms para apagar proxies lentos"
+                  />
+                  <button
+                    className="btn sm"
+                    disabled={!activeProxyList || activeProxyList.proxies.length === 0}
+                    onClick={() => {
+                      if (!activeProxyList) return;
+                      const limit = Number(listMaxMs);
+                      if (!Number.isFinite(limit) || limit <= 0) {
+                        notify("Informe um limite em ms válido");
+                        return;
+                      }
+                      let removed = 0;
+                      updateActiveListProxies((prev) =>
+                        prev.filter((p) => {
+                          const real = tcpPings[pKey(p)];
+                          const ms = typeof real === "number" ? real : p.timeout;
+                          const tooSlow = typeof ms === "number" && ms > limit;
+                          if (tooSlow) removed++;
+                          return !tooSlow;
+                        })
+                      );
+                      notify(`${removed} proxy(s) acima de ${limit} ms apagado(s)`);
+                    }}
+                  >
+                    <Trash2 size={12} /> Apagar &gt; {listMaxMs || "500"} ms
+                  </button>
+                </div>
+
+                <div className="row" style={{ gap: 6 }}>
+                  <button
+                    className="btn sm"
+                    disabled={!activeProxyList || activeProxyList.proxies.length === 0}
+                    onClick={() => {
+                      if (!activeProxyList) return;
+                      setFallbackQueue(activeProxyList.proxies.slice(0, 300));
+                      notify(`Lista "${activeProxyList.name}" enviada para o Fallback`);
+                    }}
+                  >
+                    <Shield size={12} /> Enviar para Fallback
+                  </button>
+                  <button
+                    className="btn sm success"
+                    disabled={!activeProxyList || activeProxyList.proxies.length === 0}
+                    onClick={() => {
+                      if (!activeProxyList) return;
+                      void startWithProxies(activeProxyList.proxies, activeProxyList.name, strategy);
+                    }}
+                  >
+                    <Power size={12} /> Conectar Lista
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>País</th>
+                    <th>Endereço</th>
+                    <th>Protocolo</th>
+                    <th>Ping Real</th>
+                    <th style={{ textAlign: "right" }}>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!activeProxyList || activeProxyList.proxies.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: 24 }}>
+                        {proxyLists.length === 0
+                          ? "Nenhuma lista criada. Selecione proxies no Buscador e clique em 'Criar lista de selecionados'."
+                          : "Esta lista está vazia."}
+                      </td>
+                    </tr>
+                  ) : (
+                    activeProxyList.proxies.map((p) => {
+                      const k = pKey(p);
+                      const val = tcpPings[k] ?? (p.timeout != null ? Math.round(p.timeout) : null);
+                      return (
+                        <tr key={k}>
+                          <td>
+                            <div className="row" style={{ gap: 7, flexWrap: "nowrap" }}>
+                              <FlagBadge code={p.country_code} />
+                              <span>{p.country_name || p.country_code || "Desconhecido"}</span>
+                            </div>
+                          </td>
+                          <td className="mono">
+                            {p.host}:{p.port}
+                          </td>
+                          <td>
+                            <span className={`pill ${p.protocol === "socks5" ? "blue" : ""}`}>
+                              {p.protocol.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="mono">
+                            {val === "timeout" ? (
+                              <span className="pill red">Falhou</span>
+                            ) : typeof val === "number" ? (
+                              <span className={`pill ${val < 300 ? "green" : val <= 1000 ? "amber" : "red"}`}>
+                                {val} ms
+                              </span>
+                            ) : (
+                              "--"
+                            )}
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            <div className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
+                              <button
+                                className="btn sm"
+                                disabled={pingingTcp.includes(k)}
+                                onClick={() => pingScraperHttp(p)}
+                              >
+                                {pingingTcp.includes(k) ? "..." : "Ping"}
+                              </button>
+                              <button
+                                className="btn sm success"
+                                onClick={() => startWithProxies([p], `${p.host}:${p.port}`)}
+                              >
+                                Usar
+                              </button>
+                              <button
+                                className="btn sm"
+                                onClick={() => updateActiveListProxies((prev) => prev.filter((x) => pKey(x) !== k))}
+                                title="Remover da lista"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </main>
+
+      {createListOpen && (
+        <div className="modal-bg" onClick={() => setCreateListOpen(false)}>
+          <div className="modal" style={{ width: "min(420px, 92vw)" }} onClick={(e) => e.stopPropagation()}>
+            <b>Criar lista com {selected.length} proxy(s) selecionado(s)</b>
+            <input
+              className="input"
+              autoFocus
+              placeholder="Nome da lista..."
+              value={newListName}
+              onChange={(e) => setNewListName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const name = newListName.trim() || `Lista ${proxyLists.length + 1}`;
+                  const items = proxies.filter((p) => selectedSet.has(pKey(p)));
+                  const id = `${Date.now()}`;
+                  setProxyLists((prev) => [...prev, { id, name, proxies: items }]);
+                  setActiveListId(id);
+                  setCreateListOpen(false);
+                  setTab("lists");
+                  notify(`Lista "${name}" criada com ${items.length} proxy(s)`);
+                }
+              }}
+            />
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => setCreateListOpen(false)}>
+                Cancelar
+              </button>
+              <button
+                className="btn primary"
+                onClick={() => {
+                  const name = newListName.trim() || `Lista ${proxyLists.length + 1}`;
+                  const items = proxies.filter((p) => selectedSet.has(pKey(p)));
+                  const id = `${Date.now()}`;
+                  setProxyLists((prev) => [...prev, { id, name, proxies: items }]);
+                  setActiveListId(id);
+                  setCreateListOpen(false);
+                  setTab("lists");
+                  notify(`Lista "${name}" criada com ${items.length} proxy(s)`);
+                }}
+              >
+                Criar Lista
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {cfgOpen && (
         <div className="modal-bg" onClick={() => setCfgOpen(false)}>

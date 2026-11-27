@@ -395,6 +395,8 @@ export default function App() {
   const [proto, setProto] = useState("compat");
   const [country, setCountry] = useState("all");
   const [maxMs, setMaxMs] = useState("");
+  const [sortCol, setSortCol] = useState<"ping" | "country">("ping");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [hideTransparent, setHideTransparent] = useState(true);
   const [strategy, setStrategy] = useState<"fallback" | "url-test">("fallback");
   const [killSwitch, setKillSwitch] = useState(false);
@@ -404,6 +406,8 @@ export default function App() {
   const [tcpPings, setTcpPings] = useState<Record<string, number | "timeout">>({});
   const [pingingTcp, setPingingTcp] = useState<string[]>([]);
   const [batchPingProgress, setBatchPingProgress] = useState<{ done: number; total: number } | null>(null);
+  const [pingBatchSize, setPingBatchSize] = useState(10);
+  const pingBatchSizeRef = useRef(10);
   const batchPingAbortRef = useRef(false);
   const [fallbackQueue, setFallbackQueue] = useState<ScrapedProxy[]>([]);
   const [fallbackWidth, setFallbackWidth] = useState(300);
@@ -491,7 +495,10 @@ export default function App() {
       try {
         const list = await invoke<ScrapedProxy[]>("scraper_list_proxies");
         setProxies(list);
-        void pingBatchReal(list.slice(0, 50));
+        const compat = list.filter(
+          (p) => p.protocol === "http" || p.protocol === "socks5"
+        );
+        void pingBatchReal(compat.slice(0, 300));
       } catch (e) {
         notify(String(e));
       }
@@ -558,20 +565,30 @@ export default function App() {
   }, [scraping, refreshProxies]);
 
   const countries = useMemo(() => {
-    const map = new Map<string, string>();
+    const map = new Map<string, { name: string; count: number }>();
     for (const p of proxies) {
+      if (proto === "compat" && p.protocol !== "http" && p.protocol !== "socks5")
+        continue;
+      if (proto !== "all" && proto !== "compat" && p.protocol !== proto) continue;
+      if (hideTransparent && p.anonymity?.toLowerCase() === "transparent") continue;
       if (p.country_code) {
-        map.set(p.country_code, p.country_name || p.country_code);
+        const cur = map.get(p.country_code);
+        map.set(p.country_code, {
+          name: cur?.name || p.country_name || p.country_code,
+          count: (cur?.count ?? 0) + 1,
+        });
       }
     }
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [proxies]);
+    return Array.from(map.entries()).sort((a, b) =>
+      a[1].name.localeCompare(b[1].name)
+    );
+  }, [proxies, proto, hideTransparent]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const parsedMax = Number(maxMs.trim());
     const hasMax = maxMs.trim() !== "" && Number.isFinite(parsedMax) && parsedMax > 0;
-    return proxies.filter((p) => {
+    const list = proxies.filter((p) => {
       if (proto === "compat" && p.protocol !== "http" && p.protocol !== "socks5")
         return false;
       if (proto !== "all" && proto !== "compat" && p.protocol !== proto)
@@ -585,6 +602,7 @@ export default function App() {
         return false;
       if (hasMax) {
         const real = tcpPings[pKey(p)];
+        if (real === "timeout") return false;
         const msVal = typeof real === "number" ? real : p.timeout;
         if (msVal == null || msVal > parsedMax) return false;
       }
@@ -597,7 +615,26 @@ export default function App() {
         (p.country_code?.toLowerCase().includes(q) ?? false)
       );
     });
-  }, [proxies, search, proto, country, maxMs, hideTransparent, tcpPings]);
+    const pingRank = (p: ScrapedProxy): [number, number] => {
+      const real = tcpPings[pKey(p)];
+      if (typeof real === "number") return [0, real];
+      if (real === "timeout") return [2, Number.MAX_SAFE_INTEGER];
+      return [1, p.timeout ?? Number.MAX_SAFE_INTEGER];
+    };
+    return [...list].sort((a, b) => {
+      if (sortCol === "country") {
+        const ca = a.country_name || a.country_code || "ZZZ";
+        const cb = b.country_name || b.country_code || "ZZZ";
+        const cmp = ca.localeCompare(cb);
+        return sortDir === "asc" ? cmp : -cmp;
+      }
+      const [ta, va] = pingRank(a);
+      const [tb, vb] = pingRank(b);
+      if (ta !== tb) return ta - tb;
+      const cmp = va - vb;
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [proxies, search, proto, country, maxMs, hideTransparent, tcpPings, sortCol, sortDir]);
 
   const compatVisible = useMemo(
     () => filtered.filter((p) => p.protocol === "http" || p.protocol === "socks5"),
@@ -716,10 +753,10 @@ export default function App() {
       if (list.length === 0) return;
       batchPingAbortRef.current = false;
       setBatchPingProgress({ done: 0, total: list.length });
-      const BATCH_SIZE = 10;
-      for (let i = 0; i < list.length; i += BATCH_SIZE) {
+      const batchSize = Math.max(1, pingBatchSizeRef.current);
+      for (let i = 0; i < list.length; i += batchSize) {
         if (batchPingAbortRef.current) break;
-        const chunk = list.slice(i, i + BATCH_SIZE);
+        const chunk = list.slice(i, i + batchSize);
         await Promise.all(chunk.map((p) => pingScraperHttp(p)));
         setBatchPingProgress({
           done: Math.min(i + chunk.length, list.length),
@@ -1277,6 +1314,22 @@ export default function App() {
                       ? `Usar Selecionados em Fallback (${selected.length})`
                       : "Usar Todos em Fallback"}
                   </button>
+                  <select
+                    className="select"
+                    value={pingBatchSize}
+                    disabled={!!batchPingProgress}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setPingBatchSize(v);
+                      pingBatchSizeRef.current = v;
+                    }}
+                    title="Quantidade de proxies testados por vez no ping real"
+                  >
+                    <option value={10}>10 por vez</option>
+                    <option value={20}>20 por vez</option>
+                    <option value={30}>30 por vez</option>
+                    <option value={50}>50 por vez</option>
+                  </select>
                   <button
                     className={`btn ${batchPingProgress ? "danger" : ""}`}
                     disabled={!batchPingProgress && filtered.length === 0}
@@ -1284,15 +1337,15 @@ export default function App() {
                       if (batchPingProgress) {
                         batchPingAbortRef.current = true;
                       } else {
-                        void pingBatchReal(filtered.slice(0, 100));
+                        void pingBatchReal(filtered.slice(0, 300));
                       }
                     }}
-                    title="Mede a latência real (generate_204) de 10 em 10 proxies sem congestionamento"
+                    title="Mede a latência real (generate_204) no tamanho de lote escolhido"
                   >
                     <Zap size={14} />{" "}
                     {batchPingProgress
                       ? `Parar Ping (${batchPingProgress.done}/${batchPingProgress.total})`
-                      : "Ping Real 10x"}
+                      : `Ping Real ${pingBatchSize}x`}
                   </button>
                   <button
                     className="btn"
@@ -1337,21 +1390,28 @@ export default function App() {
                   <option value="socks4">SOCKS4</option>
                 </select>
                 <select className="select" value={country} onChange={(e) => setCountry(e.target.value)}>
-                  <option value="all">Todos países</option>
-                  {countries.map(([c, n]) => (
+                  <option value="all">Todos países ({countries.length})</option>
+                  {countries.map(([c, info]) => (
                     <option key={c} value={c}>
-                      [{c}] {n}
+                      [{c}] {info.name} ({info.count})
                     </option>
                   ))}
                 </select>
                 <input
                   className="input"
-                  style={{ width: 110 }}
+                  style={{ width: 115 }}
                   type="number"
+                  list="ping-presets"
                   placeholder="Máx ms"
                   value={maxMs}
                   onChange={(e) => setMaxMs(e.target.value)}
                 />
+                <datalist id="ping-presets">
+                  <option value="150" />
+                  <option value="300" />
+                  <option value="600" />
+                  <option value="1000" />
+                </datalist>
                 <button className="btn sm" onClick={refreshProxies}>
                   <RefreshCw size={13} />
                 </button>
@@ -1420,10 +1480,36 @@ export default function App() {
                             }}
                           />
                         </th>
-                        <th>País</th>
+                        <th
+                          style={{ cursor: "pointer", userSelect: "none" }}
+                          onClick={() => {
+                            if (sortCol === "country") {
+                              setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                            } else {
+                              setSortCol("country");
+                              setSortDir("asc");
+                            }
+                          }}
+                          title="Ordenar por país"
+                        >
+                          País {sortCol === "country" ? (sortDir === "asc" ? "▲" : "▼") : ""}
+                        </th>
                         <th>Endereço</th>
                         <th>Protocolo</th>
-                        <th>Latência</th>
+                        <th
+                          style={{ cursor: "pointer", userSelect: "none" }}
+                          onClick={() => {
+                            if (sortCol === "ping") {
+                              setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+                            } else {
+                              setSortCol("ping");
+                              setSortDir("asc");
+                            }
+                          }}
+                          title="Ordenar por latência real"
+                        >
+                          Latência {sortCol === "ping" ? (sortDir === "asc" ? "▲" : "▼") : ""}
+                        </th>
                         <th style={{ textAlign: "right" }}>Ações</th>
                       </tr>
                     </thead>

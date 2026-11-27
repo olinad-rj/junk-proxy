@@ -971,35 +971,70 @@ async fn check_exit_ip(state: State<'_, AppState>) -> Result<Value, String> {
 }
 
 fn check_exit_ip_sync(via_proxy: bool) -> Result<Value, String> {
-    let mut cmd = Command::new("curl.exe");
-    cmd.arg("-s").arg("--max-time").arg("7");
-    if via_proxy {
-        cmd.arg("-x").arg(format!("http://127.0.0.1:{MIXED_PORT}"));
+    let run_curl = |url: &str| -> Option<Value> {
+        let mut cmd = Command::new("curl.exe");
+        cmd.arg("-s").arg("--max-time").arg("10");
+        if via_proxy {
+            cmd.arg("-x").arg(format!("http://127.0.0.1:{MIXED_PORT}"));
+        }
+        cmd.arg(url);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let out = cmd.output().ok()?;
+        serde_json::from_slice::<Value>(&out.stdout).ok()
+    };
+
+    if let Some(parsed) = run_curl("https://ipwho.is/") {
+        let ok = parsed.get("success").and_then(Value::as_bool).unwrap_or(true);
+        if ok && parsed.get("ip").and_then(Value::as_str).is_some() {
+            let asn_num = parsed.pointer("/connection/asn").and_then(Value::as_u64);
+            return Ok(json!({
+                "via_proxy": via_proxy,
+                "ip": parsed.get("ip").cloned().unwrap_or(Value::Null),
+                "country": parsed.get("country").cloned().unwrap_or(Value::Null),
+                "country_code": parsed.get("country_code").cloned().unwrap_or(Value::Null),
+                "region": parsed.get("region").cloned().unwrap_or(Value::Null),
+                "city": parsed.get("city").cloned().unwrap_or(Value::Null),
+                "isp": parsed.pointer("/connection/isp").cloned().unwrap_or(Value::Null),
+                "org": parsed.pointer("/connection/org").cloned().unwrap_or(Value::Null),
+                "asn": asn_num.map(|n| Value::String(format!("AS{n}"))).unwrap_or(Value::Null),
+                "timezone": parsed.pointer("/timezone/id").cloned().unwrap_or(Value::Null),
+                "latitude": parsed.get("latitude").cloned().unwrap_or(Value::Null),
+                "longitude": parsed.get("longitude").cloned().unwrap_or(Value::Null),
+            }));
+        }
     }
-    cmd.arg("https://ipwho.is/");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+
+    // Fallback caso ipwho.is bloqueie ou atinja limite no IP do proxy.
+    if let Some(p2) = run_curl("http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,lat,lon,timezone,isp,org,as,query") {
+        if p2.get("status").and_then(Value::as_str) == Some("success") {
+            let asn = p2
+                .get("as")
+                .and_then(Value::as_str)
+                .and_then(|s| s.split_whitespace().next())
+                .map(|s| Value::String(s.to_string()))
+                .unwrap_or(Value::Null);
+            return Ok(json!({
+                "via_proxy": via_proxy,
+                "ip": p2.get("query").cloned().unwrap_or(Value::Null),
+                "country": p2.get("country").cloned().unwrap_or(Value::Null),
+                "country_code": p2.get("countryCode").cloned().unwrap_or(Value::Null),
+                "region": p2.get("regionName").cloned().unwrap_or(Value::Null),
+                "city": p2.get("city").cloned().unwrap_or(Value::Null),
+                "isp": p2.get("isp").cloned().unwrap_or(Value::Null),
+                "org": p2.get("org").cloned().unwrap_or(Value::Null),
+                "asn": asn,
+                "timezone": p2.get("timezone").cloned().unwrap_or(Value::Null),
+                "latitude": p2.get("lat").cloned().unwrap_or(Value::Null),
+                "longitude": p2.get("lon").cloned().unwrap_or(Value::Null),
+            }));
+        }
     }
-    let out = cmd.output().map_err(|e| e.to_string())?;
-    let parsed: Value = serde_json::from_slice(&out.stdout)
-        .map_err(|_| "Não foi possível consultar o IP de saída".to_string())?;
-    let asn_num = parsed.pointer("/connection/asn").and_then(Value::as_u64);
-    Ok(json!({
-        "via_proxy": via_proxy,
-        "ip": parsed.get("ip").cloned().unwrap_or(Value::Null),
-        "country": parsed.get("country").cloned().unwrap_or(Value::Null),
-        "country_code": parsed.get("country_code").cloned().unwrap_or(Value::Null),
-        "region": parsed.get("region").cloned().unwrap_or(Value::Null),
-        "city": parsed.get("city").cloned().unwrap_or(Value::Null),
-        "isp": parsed.pointer("/connection/isp").cloned().unwrap_or(Value::Null),
-        "org": parsed.pointer("/connection/org").cloned().unwrap_or(Value::Null),
-        "asn": asn_num.map(|n| Value::String(format!("AS{n}"))).unwrap_or(Value::Null),
-        "timezone": parsed.pointer("/timezone/id").cloned().unwrap_or(Value::Null),
-        "latitude": parsed.get("latitude").cloned().unwrap_or(Value::Null),
-        "longitude": parsed.get("longitude").cloned().unwrap_or(Value::Null),
-    }))
+
+    Err("Não foi possível consultar o IP de saída".to_string())
 }
 
 #[tauri::command]

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
+  Bookmark,
   CheckCircle2,
   Copy,
   Eye,
@@ -14,6 +15,7 @@ import {
   Layers,
   MapPin,
   Play,
+  Plus,
   Power,
   RefreshCw,
   Search,
@@ -409,7 +411,17 @@ export default function App() {
   const [pingBatchSize, setPingBatchSize] = useState(10);
   const pingBatchSizeRef = useRef(10);
   const batchPingAbortRef = useRef(false);
-  const [fallbackQueue, setFallbackQueue] = useState<ScrapedProxy[]>([]);
+  const [savedProxies, setSavedProxies] = useState<ScrapedProxy[]>([]);
+  const [customProxyInput, setCustomProxyInput] = useState("");
+  const [customProxyProto, setCustomProxyProto] = useState<"http" | "socks5">("http");
+  const [fallbackQueue, setFallbackQueue] = useState<ScrapedProxy[]>(() => {
+    try {
+      const raw = localStorage.getItem("junk_fallback_queue");
+      return raw ? (JSON.parse(raw) as ScrapedProxy[]) : [];
+    } catch {
+      return [];
+    }
+  });
   const [fallbackWidth, setFallbackWidth] = useState(300);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOffsetY, setDragOffsetY] = useState(0);
@@ -482,6 +494,9 @@ export default function App() {
   useEffect(() => {
     void refreshCore();
     void refreshProxies();
+    void invoke<ScrapedProxy[]>("saved_proxies_read")
+      .then(setSavedProxies)
+      .catch(() => {});
     void checkExitIp();
     void invoke<boolean>("scraper_status").then(setScraping).catch(() => {});
 
@@ -747,12 +762,128 @@ export default function App() {
         port: p.port,
       });
       setTcpPings((prev) => ({ ...prev, [k]: ms }));
+      setSavedProxies((prev) => {
+        if (!prev.some((x) => pKey(x) === k)) return prev;
+        const next = prev.map((x) => (pKey(x) === k ? { ...x, timeout: ms } : x));
+        void invoke("saved_proxies_save", { list: next }).catch(() => {});
+        return next;
+      });
     } catch {
       setTcpPings((prev) => ({ ...prev, [k]: "timeout" }));
     } finally {
       setPingingTcp((prev) => prev.filter((x) => x !== k));
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("junk_fallback_queue", JSON.stringify(fallbackQueue));
+    } catch {
+      // ignore
+    }
+  }, [fallbackQueue]);
+
+  const savedSet = useMemo(() => new Set(savedProxies.map(pKey)), [savedProxies]);
+
+  const saveProxies = useCallback(
+    (items: ScrapedProxy[]) => {
+      const valid = items.filter((p) => p.protocol === "http" || p.protocol === "socks5");
+      if (valid.length === 0) {
+        notify("Nenhum proxy HTTP ou SOCKS5 para salvar");
+        return;
+      }
+      setSavedProxies((prev) => {
+        const map = new Map(prev.map((x) => [pKey(x), x]));
+        let added = 0;
+        for (const p of valid) {
+          const k = pKey(p);
+          if (!map.has(k)) added++;
+          map.set(k, p);
+        }
+        const next = Array.from(map.values());
+        void invoke("saved_proxies_save", { list: next }).catch(() => {});
+        notify(
+          added > 0
+            ? `${added} proxy(s) salvo(s) na lista permanente`
+            : "Lista permanente atualizada"
+        );
+        return next;
+      });
+    },
+    [notify]
+  );
+
+  const removeSavedProxy = useCallback((k: string) => {
+    setSavedProxies((prev) => {
+      const next = prev.filter((x) => pKey(x) !== k);
+      void invoke("saved_proxies_save", { list: next }).catch(() => {});
+      return next;
+    });
+  }, []);
+
+  const parseCustomProxy = (
+    raw: string,
+    defaultProto: "http" | "socks5"
+  ): ScrapedProxy | null => {
+    let s = raw.trim();
+    if (!s) return null;
+    let protocol = defaultProto;
+    const schemeMatch = s.match(/^(https?|socks5h?):\/\//i);
+    if (schemeMatch) {
+      const sc = schemeMatch[1].toLowerCase();
+      protocol = sc.startsWith("socks5") ? "socks5" : "http";
+      s = s.slice(schemeMatch[0].length);
+    }
+    s = s.split("/")[0];
+    let username: string | null = null;
+    let password: string | null = null;
+    const atIdx = s.lastIndexOf("@");
+    if (atIdx !== -1) {
+      const auth = s.slice(0, atIdx);
+      s = s.slice(atIdx + 1);
+      const colon = auth.indexOf(":");
+      if (colon !== -1) {
+        username = auth.slice(0, colon);
+        password = auth.slice(colon + 1);
+      } else {
+        username = auth;
+      }
+    }
+    const lastColon = s.lastIndexOf(":");
+    if (lastColon === -1) return null;
+    const host = s.slice(0, lastColon).trim();
+    const port = Number(s.slice(lastColon + 1).trim());
+    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    return {
+      protocol,
+      host,
+      port,
+      timeout: null,
+      country_code: null,
+      country_name: null,
+      anonymity: null,
+      username,
+      password,
+    };
+  };
+
+  const handleAddCustomProxy = (alsoFallback: boolean) => {
+    const parsed = parseCustomProxy(customProxyInput, customProxyProto);
+    if (!parsed) {
+      notify("Formato inválido. Use ip:porta ou socks5://user:pass@ip:porta");
+      return;
+    }
+    saveProxies([parsed]);
+    if (alsoFallback) {
+      setFallbackQueue((prev) => {
+        const k = pKey(parsed);
+        if (prev.some((x) => pKey(x) === k)) return prev;
+        return [...prev, parsed];
+      });
+    }
+    setCustomProxyInput("");
+    void pingScraperHttp(parsed);
+  };
 
   const pingBatchReal = useCallback(
     async (list: ScrapedProxy[]) => {
@@ -1075,209 +1206,346 @@ export default function App() {
 
         {tab === "home" && (
           <div className="content">
-            <div className="grid2">
-              {/* Card completo de Informações de IP */}
-              <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div className="card-title" style={{ marginBottom: 0 }}>
-                  <span className="row" style={{ gap: 6 }}>
-                    <MapPin size={14} color="#60a5fa" />
-                    <span>Informações de IP</span>
-                  </span>
-                  <button className="btn sm" disabled={checkingIp} onClick={checkExitIp}>
-                    <RefreshCw size={12} /> {checkingIp ? "..." : "Atualizar"}
-                  </button>
-                </div>
+            <div className="split-scraper" style={{ flex: 1, minHeight: 0 }}>
+              <div className="split-left" style={{ gap: 12 }}>
+                <div className="grid2">
+                  {/* Card completo de Informações de IP */}
+                  <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div className="card-title" style={{ marginBottom: 0 }}>
+                      <span className="row" style={{ gap: 6 }}>
+                        <MapPin size={14} color="#60a5fa" />
+                        <span>Informações de IP</span>
+                      </span>
+                      <button className="btn sm" disabled={checkingIp} onClick={checkExitIp}>
+                        <RefreshCw size={12} /> {checkingIp ? "..." : "Atualizar"}
+                      </button>
+                    </div>
 
-                {ipInfo ? (
-                  <>
-                    <div className="ip-grid">
-                      <div>
-                        <div className="ip-row">
-                          <FlagBadge code={ipInfo.country_code} />
-                          <b>{ipInfo.country_code || "--"}</b>
+                    {ipInfo ? (
+                      <>
+                        <div className="ip-grid">
+                          <div>
+                            <div className="ip-row">
+                              <FlagBadge code={ipInfo.country_code} />
+                              <b>{ipInfo.country_code || "--"}</b>
+                            </div>
+                            <div className="ip-row">
+                              <span className="ip-label">IP:</span>
+                              <span className="mono">
+                                {showIp ? ipInfo.ip || "--" : "••••••••••"}
+                              </span>
+                              <button
+                                className="btn sm"
+                                style={{ padding: "2px 5px" }}
+                                onClick={() => setShowIp((v) => !v)}
+                                title={showIp ? "Ocultar IP" : "Mostrar IP"}
+                              >
+                                {showIp ? <EyeOff size={12} /> : <Eye size={12} />}
+                              </button>
+                            </div>
+                            <div className="ip-row">
+                              <span className="ip-label">ASN:</span>
+                              <span className="mono">{ipInfo.asn || "--"}</span>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="ip-row">
+                              <span className="ip-label">ISP:</span>
+                              <span>{ipInfo.isp || "--"}</span>
+                            </div>
+                            <div className="ip-row">
+                              <span className="ip-label">ORG:</span>
+                              <span>{ipInfo.org || ipInfo.isp || "--"}</span>
+                            </div>
+                            <div className="ip-row">
+                              <span className="ip-label">Localização:</span>
+                              <span>
+                                {[ipInfo.city, ipInfo.region].filter(Boolean).join(", ") || "--"}
+                              </span>
+                            </div>
+                            <div className="ip-row">
+                              <span className="ip-label">Fuso horário:</span>
+                              <span>{ipInfo.timezone || "--"}</span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="ip-row">
-                          <span className="ip-label">IP:</span>
+
+                        <div
+                          className="row"
+                          style={{
+                            justifyContent: "space-between",
+                            paddingTop: 8,
+                            borderTop: "1px solid var(--border)",
+                            fontSize: 11.5,
+                            color: "var(--muted)",
+                          }}
+                        >
+                          <label className="row" style={{ gap: 6, cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={autoIp}
+                              onChange={(e) => setAutoIp(e.target.checked)}
+                            />
+                            Atualização automática: {autoIp ? `${ipCountdown}s` : "OFF"}
+                          </label>
                           <span className="mono">
-                            {showIp ? ipInfo.ip || "--" : "••••••••••"}
+                            {ipInfo.country_code || "--"}
+                            {ipInfo.longitude != null && ipInfo.latitude != null
+                              ? `, ${ipInfo.longitude.toFixed(2)}, ${ipInfo.latitude.toFixed(2)}`
+                              : ""}
+                            {" · "}
+                            <b style={{ color: ipInfo.via_proxy ? "#4ade80" : "var(--text)" }}>
+                              {ipInfo.via_proxy ? "Via Proxy" : "Direto"}
+                            </b>
                           </span>
-                          <button
-                            className="btn sm"
-                            style={{ padding: "2px 5px" }}
-                            onClick={() => setShowIp((v) => !v)}
-                            title={showIp ? "Ocultar IP" : "Mostrar IP"}
-                          >
-                            {showIp ? <EyeOff size={12} /> : <Eye size={12} />}
-                          </button>
                         </div>
-                        <div className="ip-row">
-                          <span className="ip-label">ASN:</span>
-                          <span className="mono">{ipInfo.asn || "--"}</span>
-                        </div>
+                      </>
+                    ) : (
+                      <div style={{ color: "var(--muted)", fontSize: 12.5 }}>
+                        Consultando informações de IP...
                       </div>
+                    )}
+                  </div>
 
-                      <div>
-                        <div className="ip-row">
-                          <span className="ip-label">ISP:</span>
-                          <span>{ipInfo.isp || "--"}</span>
+                  {/* Card Status & Resumo */}
+                  <div
+                    className="card"
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: "space-between",
+                      borderColor: core.running ? "rgba(34,197,94,0.4)" : undefined,
+                      background: core.running
+                        ? "linear-gradient(135deg, rgba(34,197,94,0.08), var(--surface))"
+                        : undefined,
+                    }}
+                  >
+                    <div>
+                      <div className="card-title">
+                        <span>Status da Conexão</span>
+                        <span className={`pill ${core.running ? "green" : ""}`}>
+                          127.0.0.1:{core.port}
+                        </span>
+                      </div>
+                      <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
+                        <div>
+                          <div
+                            className="big-val"
+                            style={{ color: core.running ? "#4ade80" : "var(--muted)" }}
+                          >
+                            {core.running ? "Conectado" : "Desconectado"}
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                            Nó ativo: <b style={{ color: "var(--text)" }}>{activeGroup?.now || "Nenhum"}</b>
+                          </div>
                         </div>
-                        <div className="ip-row">
-                          <span className="ip-label">ORG:</span>
-                          <span>{ipInfo.org || ipInfo.isp || "--"}</span>
-                        </div>
-                        <div className="ip-row">
-                          <span className="ip-label">Localização:</span>
-                          <span>
-                            {[ipInfo.city, ipInfo.region].filter(Boolean).join(", ") || "--"}
-                          </span>
-                        </div>
-                        <div className="ip-row">
-                          <span className="ip-label">Fuso horário:</span>
-                          <span>{ipInfo.timezone || "--"}</span>
+                        <div className="row" style={{ gap: 6 }}>
+                          <span className="pill blue">{savedProxies.length} salvos</span>
                         </div>
                       </div>
                     </div>
 
                     <div
+                      style={{
+                        fontSize: 11.5,
+                        color: "var(--muted)",
+                        lineHeight: 1.5,
+                        paddingTop: 10,
+                        borderTop: "1px solid var(--border)",
+                      }}
+                    >
+                      <b style={{ color: "var(--text)" }}>Roteamento no Windows:</b>{" "}
+                      <b>Proxy do Sistema</b> redireciona navegadores e apps;{" "}
+                      <b>Modo TUN</b> captura todos os programas (requer Admin).
+                    </div>
+                  </div>
+                </div>
+
+                {/* Card Proxy Personalizado */}
+                <div className="card" style={{ padding: "10px 14px" }}>
+                  <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+                    <span className="row" style={{ gap: 6, fontSize: 12, fontWeight: 700 }}>
+                      <Plus size={14} color="#60a5fa" />
+                      <span>Adicionar Proxy Personalizado (salva na sua lista permanente)</span>
+                    </span>
+                    <button className="btn sm" onClick={() => setTab("proxies")}>
+                      Ver Salvos ({savedProxies.length})
+                    </button>
+                  </div>
+                  <div className="row">
+                    <select
+                      className="select"
+                      value={customProxyProto}
+                      onChange={(e) => setCustomProxyProto(e.target.value as "http" | "socks5")}
+                    >
+                      <option value="http">HTTP</option>
+                      <option value="socks5">SOCKS5</option>
+                    </select>
+                    <input
+                      className="input"
+                      style={{ flex: 1, minWidth: 200 }}
+                      placeholder="Ex: 1.2.3.4:8080 ou socks5://user:pass@1.2.3.4:1080"
+                      value={customProxyInput}
+                      onChange={(e) => setCustomProxyInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleAddCustomProxy(true);
+                      }}
+                    />
+                    <button className="btn" onClick={() => handleAddCustomProxy(false)}>
+                      <Bookmark size={13} /> Salvar
+                    </button>
+                    <button className="btn primary" onClick={() => handleAddCustomProxy(true)}>
+                      <Plus size={13} /> Salvar + Fallback
+                    </button>
+                  </div>
+                </div>
+
+                {/* Gráfico de Estatísticas de Tráfego (60fps Canvas responsivo) */}
+                <div className="card" style={{ flex: 1, minHeight: 200, display: "flex", flexDirection: "column" }}>
+                  <div className="card-title" style={{ marginBottom: 10 }}>
+                    <span className="row" style={{ gap: 8, textTransform: "none", fontSize: 13.5, color: "var(--text)" }}>
+                      <span
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 6,
+                          background: "rgba(245, 158, 11, 0.14)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <Gauge size={14} color="#f59e0b" />
+                      </span>
+                      <b>Estatísticas de tráfego</b>
+                    </span>
+                    <div className="row" style={{ gap: 14, textTransform: "none", fontSize: 11.5 }}>
+                      <span style={{ color: "#f59e0b", fontWeight: 600 }}>
+                        Envio: <span className="mono">{fmtSpeed(currentTraffic.up)}</span> ({fmtBytes(totalBytes.up)})
+                      </span>
+                      <span style={{ color: "#3b82f6", fontWeight: 600 }}>
+                        Recebimento: <span className="mono">{fmtSpeed(currentTraffic.down)}</span> ({fmtBytes(totalBytes.down)})
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      background: "var(--surface2)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      padding: "8px 10px 6px",
+                    }}
+                  >
+                    <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
+                      <span className="pill" style={{ fontSize: 10.5, padding: "2px 8px" }}>
+                        Tempo real
+                      </span>
+                      <div className="row" style={{ gap: 10, fontSize: 11, fontWeight: 600 }}>
+                        <span style={{ color: "#f59e0b" }}>Envio</span>
+                        <span style={{ color: "#3b82f6" }}>Recebimento</span>
+                      </div>
+                    </div>
+
+                    <TrafficChart data={traffic} active={core.running} />
+
+                    <div
                       className="row"
                       style={{
                         justifyContent: "space-between",
-                        paddingTop: 8,
-                        borderTop: "1px solid var(--border)",
-                        fontSize: 11.5,
-                        color: "var(--muted)",
+                        fontSize: 10.5,
+                        color: "#64748b",
+                        marginTop: 2,
                       }}
                     >
-                      <label className="row" style={{ gap: 6, cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={autoIp}
-                          onChange={(e) => setAutoIp(e.target.checked)}
-                        />
-                        Atualização automática: {autoIp ? `${ipCountdown}s` : "OFF"}
-                      </label>
-                      <span className="mono">
-                        {ipInfo.country_code || "--"}
-                        {ipInfo.longitude != null && ipInfo.latitude != null
-                          ? `, ${ipInfo.longitude.toFixed(2)}, ${ipInfo.latitude.toFixed(2)}`
-                          : ""}
-                        {" · "}
-                        <b style={{ color: ipInfo.via_proxy ? "#4ade80" : "var(--text)" }}>
-                          {ipInfo.via_proxy ? "Via Proxy" : "Direto"}
-                        </b>
-                      </span>
+                      <span>Pontos: {traffic.length} | Intervalo: 1s</span>
+                      <span>60 FPS · Suave</span>
                     </div>
-                  </>
-                ) : (
-                  <div style={{ color: "var(--muted)", fontSize: 12.5 }}>
-                    Consultando informações de IP...
                   </div>
-                )}
-              </div>
-
-              {/* Card Status & Resumo */}
-              <div className="card" style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-                <div>
-                  <div className="card-title">Status da Conexão</div>
-                  <div className="row" style={{ justifyContent: "space-between" }}>
-                    <div>
-                      <div
-                        className="big-val"
-                        style={{ color: core.running ? "#4ade80" : "var(--muted)" }}
-                      >
-                        {core.running ? "Conectado" : "Desconectado"}
-                      </div>
-                      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                        Nó ativo: <b style={{ color: "var(--text)" }}>{activeGroup?.now || "Nenhum"}</b>
-                      </div>
-                    </div>
-                    <span className={`pill ${core.running ? "green" : ""}`}>
-                      127.0.0.1:{core.port}
-                    </span>
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    fontSize: 11.5,
-                    color: "var(--muted)",
-                    lineHeight: 1.55,
-                    paddingTop: 10,
-                    borderTop: "1px solid var(--border)",
-                  }}
-                >
-                  <b style={{ color: "var(--text)" }}>Roteamento no Windows:</b>{" "}
-                  <b>Proxy do Sistema</b> redireciona navegadores e apps padrão;{" "}
-                  <b>Modo TUN</b> captura todos os programas/jogos (requer executar como Administrador).
-                </div>
-              </div>
-            </div>
-
-            {/* Gráfico de Estatísticas de Tráfego (60fps Canvas responsivo) */}
-            <div className="card" style={{ flex: 1, minHeight: 230, display: "flex", flexDirection: "column" }}>
-              <div className="card-title" style={{ marginBottom: 10 }}>
-                <span className="row" style={{ gap: 8, textTransform: "none", fontSize: 13.5, color: "var(--text)" }}>
-                  <span
-                    style={{
-                      width: 24,
-                      height: 24,
-                      borderRadius: 6,
-                      background: "rgba(245, 158, 11, 0.14)",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Gauge size={14} color="#f59e0b" />
-                  </span>
-                  <b>Estatísticas de tráfego</b>
-                </span>
-                <div className="row" style={{ gap: 14, textTransform: "none", fontSize: 11.5 }}>
-                  <span style={{ color: "#f59e0b", fontWeight: 600 }}>
-                    Envio: <span className="mono">{fmtSpeed(currentTraffic.up)}</span> ({fmtBytes(totalBytes.up)})
-                  </span>
-                  <span style={{ color: "#3b82f6", fontWeight: 600 }}>
-                    Recebimento: <span className="mono">{fmtSpeed(currentTraffic.down)}</span> ({fmtBytes(totalBytes.down)})
-                  </span>
                 </div>
               </div>
 
               <div
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
-                  background: "var(--surface2)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 8,
-                  padding: "8px 10px 6px",
-                }}
-              >
-                <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
-                  <span className="pill" style={{ fontSize: 10.5, padding: "2px 8px" }}>
-                    Tempo real
-                  </span>
-                  <div className="row" style={{ gap: 10, fontSize: 11, fontWeight: 600 }}>
-                    <span style={{ color: "#f59e0b" }}>Envio</span>
-                    <span style={{ color: "#3b82f6" }}>Recebimento</span>
+                className="split-resizer"
+                title="Arraste para redimensionar o painel Fallback"
+                onMouseDown={startResizeFallback}
+              />
+
+              {/* Fila do Fallback visível no Início */}
+              <aside className="split-right" style={{ width: fallbackWidth }}>
+                <div className="row" style={{ justifyContent: "space-between" }}>
+                  <div className="row" style={{ gap: 6 }}>
+                    <Shield size={15} color="#60a5fa" />
+                    <b>Fila do Fallback ({fallbackQueue.length})</b>
                   </div>
+                  {fallbackQueue.length > 0 && (
+                    <button className="btn sm" onClick={() => setFallbackQueue([])}>
+                      Limpar
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+                  Arraste para reordenar (#1 é o principal; se cair, passa para o #2).
                 </div>
 
-                <TrafficChart data={traffic} active={core.running} />
+                <div className="fb-list" ref={fbListRef}>
+                  {fallbackQueue.length === 0 ? (
+                    <div style={{ color: "var(--muted)", fontSize: 12, padding: "18px 6px", textAlign: "center" }}>
+                      Adicione um proxy personalizado acima ou envie proxies do <b>Buscador</b> / <b>Salvos</b> para cá.
+                    </div>
+                  ) : (
+                    fallbackQueue.map((p, idx) => (
+                      <div
+                        key={pKey(p)}
+                        data-fb-idx={idx}
+                        onPointerDown={(e) => startPointerDrag(idx, e)}
+                        className={`fb-item ${dragIdx === idx ? "dragging" : ""}`}
+                        style={
+                          dragIdx === idx
+                            ? { transform: `translateY(${dragOffsetY}px) scale(1.02)` }
+                            : undefined
+                        }
+                      >
+                        <div className="row" style={{ gap: 6, minWidth: 0, flexWrap: "nowrap" }}>
+                          <GripVertical size={14} color="#64748b" style={{ flexShrink: 0 }} />
+                          <span className="fb-rank">#{idx + 1}</span>
+                          <FlagBadge code={p.country_code} />
+                          <div style={{ minWidth: 0 }}>
+                            <div className="mono" style={{ fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis" }}>
+                              {p.host}:{p.port}
+                            </div>
+                            <div style={{ fontSize: 10.5, color: "var(--muted)" }}>
+                              {p.protocol.toUpperCase()}
+                              {p.timeout != null ? ` · ${Math.round(p.timeout)}ms` : ""}
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          className="btn sm"
+                          style={{ padding: "3px 5px" }}
+                          onClick={() => setFallbackQueue((prev) => prev.filter((_, i) => i !== idx))}
+                          title="Remover"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
 
-                <div
-                  className="row"
-                  style={{
-                    justifyContent: "space-between",
-                    fontSize: 10.5,
-                    color: "#64748b",
-                    marginTop: 2,
-                  }}
+                <button
+                  className="btn primary"
+                  style={{ width: "100%", justifyContent: "center" }}
+                  disabled={fallbackQueue.length === 0}
+                  onClick={() => startWithProxies(fallbackQueue, "Fallback", "fallback")}
                 >
-                  <span>Pontos: {traffic.length} | Intervalo: 1s</span>
-                  <span>60 FPS · Suave</span>
-                </div>
-              </div>
+                  <Power size={14} /> Aplicar / Conectar ({fallbackQueue.length})
+                </button>
+              </aside>
             </div>
           </div>
         )}
@@ -1356,6 +1624,21 @@ export default function App() {
                     {batchPingProgress
                       ? `Parar Ping (${batchPingProgress.done}/${batchPingProgress.total})`
                       : `Ping Real ${pingBatchSize}x`}
+                  </button>
+                  <button
+                    className="btn"
+                    disabled={compatVisible.length === 0 && selected.length === 0}
+                    onClick={() => {
+                      const items =
+                        selected.length > 0
+                          ? proxies.filter((p) => selectedSet.has(pKey(p)))
+                          : compatVisible;
+                      saveProxies(items);
+                    }}
+                    title="Salvar proxies selecionados (ou visíveis) na lista permanente"
+                  >
+                    <Bookmark size={14} />{" "}
+                    {selected.length > 0 ? `Salvar (${selected.length})` : "Salvar Working"}
                   </button>
                   <button
                     className="btn"
@@ -1616,6 +1899,15 @@ export default function App() {
                                 </button>
                                 <button
                                   className="btn sm"
+                                  disabled={!ok}
+                                  onClick={() => saveProxies([p])}
+                                  title={savedSet.has(k) ? "Já salvo na lista permanente" : "Salvar na lista permanente"}
+                                  style={savedSet.has(k) ? { borderColor: "rgba(59,130,246,0.5)", color: "#60a5fa" } : undefined}
+                                >
+                                  <Bookmark size={12} />
+                                </button>
+                                <button
+                                  className="btn sm"
                                   onClick={() => {
                                     void navigator.clipboard.writeText(
                                       `${p.protocol}://${p.host}:${p.port}`
@@ -1746,11 +2038,185 @@ export default function App() {
 
         {tab === "proxies" && (
           <div className="content">
+            {/* Seção 1: Meus Proxies Salvos & Personalizados (sempre visível, mesmo desconectado) */}
+            <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <div className="row" style={{ gap: 8 }}>
+                  <Bookmark size={15} color="#60a5fa" />
+                  <b>Meus Proxies Salvos ({savedProxies.length})</b>
+                  <span style={{ fontSize: 11.5, color: "var(--muted)" }}>
+                    Persistidos em disco · reteste sem buscar
+                  </span>
+                </div>
+                <div className="row" style={{ gap: 6 }}>
+                  <select
+                    className="select"
+                    value={pingBatchSize}
+                    disabled={!!batchPingProgress}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setPingBatchSize(v);
+                      pingBatchSizeRef.current = v;
+                    }}
+                  >
+                    <option value={10}>10 por vez</option>
+                    <option value={20}>20 por vez</option>
+                    <option value={30}>30 por vez</option>
+                    <option value={50}>50 por vez</option>
+                  </select>
+                  <button
+                    className={`btn ${batchPingProgress ? "danger" : "primary"}`}
+                    disabled={!batchPingProgress && savedProxies.length === 0}
+                    onClick={() => {
+                      if (batchPingProgress) {
+                        batchPingAbortRef.current = true;
+                      } else {
+                        void pingBatchReal(savedProxies);
+                      }
+                    }}
+                  >
+                    <Zap size={14} />{" "}
+                    {batchPingProgress
+                      ? `Parar (${batchPingProgress.done}/${batchPingProgress.total})`
+                      : "Retestar Ping Real (sem buscar)"}
+                  </button>
+                  <button
+                    className="btn success"
+                    disabled={savedProxies.length === 0}
+                    onClick={() => startWithProxies(savedProxies, "Salvos", strategy)}
+                  >
+                    <Power size={14} /> Conectar Salvos
+                  </button>
+                </div>
+              </div>
+
+              <div className="row">
+                <select
+                  className="select"
+                  value={customProxyProto}
+                  onChange={(e) => setCustomProxyProto(e.target.value as "http" | "socks5")}
+                >
+                  <option value="http">HTTP</option>
+                  <option value="socks5">SOCKS5</option>
+                </select>
+                <input
+                  className="input"
+                  style={{ flex: 1, minWidth: 200 }}
+                  placeholder="Adicionar proxy personalizado: ip:porta ou socks5://user:pass@ip:porta"
+                  value={customProxyInput}
+                  onChange={(e) => setCustomProxyInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAddCustomProxy(false);
+                  }}
+                />
+                <button className="btn" onClick={() => handleAddCustomProxy(false)}>
+                  <Plus size={13} /> Adicionar
+                </button>
+                <button className="btn primary" onClick={() => handleAddCustomProxy(true)}>
+                  <Plus size={13} /> Adicionar + Fallback
+                </button>
+              </div>
+
+              <div className="table-wrap" style={{ maxHeight: core.running ? 240 : 420 }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>País</th>
+                      <th>Endereço</th>
+                      <th>Protocolo</th>
+                      <th>Ping Real</th>
+                      <th style={{ textAlign: "right" }}>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {savedProxies.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: 20 }}>
+                          Nenhum proxy salvo ainda. Adicione um proxy personalizado acima ou salve proxies no <b>Buscador</b>.
+                        </td>
+                      </tr>
+                    ) : (
+                      savedProxies.map((p) => {
+                        const k = pKey(p);
+                        const val = tcpPings[k] ?? (p.timeout != null ? Math.round(p.timeout) : null);
+                        return (
+                          <tr key={k}>
+                            <td>
+                              <div className="row" style={{ gap: 7, flexWrap: "nowrap" }}>
+                                <FlagBadge code={p.country_code} />
+                                <span>{p.country_name || p.country_code || "Personalizado"}</span>
+                              </div>
+                            </td>
+                            <td className="mono">
+                              {p.host}:{p.port}
+                              {p.username ? " (auth)" : ""}
+                            </td>
+                            <td>
+                              <span className={`pill ${p.protocol === "socks5" ? "blue" : ""}`}>
+                                {p.protocol.toUpperCase()}
+                              </span>
+                            </td>
+                            <td className="mono">
+                              {val === "timeout" ? (
+                                <span className="pill red">Falhou</span>
+                              ) : typeof val === "number" ? (
+                                <span className={`pill ${val < 300 ? "green" : val <= 1000 ? "amber" : "red"}`}>
+                                  {val} ms
+                                </span>
+                              ) : (
+                                "--"
+                              )}
+                            </td>
+                            <td style={{ textAlign: "right" }}>
+                              <div className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
+                                <button
+                                  className="btn sm"
+                                  disabled={pingingTcp.includes(k)}
+                                  onClick={() => pingScraperHttp(p)}
+                                >
+                                  {pingingTcp.includes(k) ? "..." : "Ping"}
+                                </button>
+                                <button
+                                  className="btn sm"
+                                  onClick={() => {
+                                    setFallbackQueue((prev) =>
+                                      prev.some((x) => pKey(x) === k) ? prev : [...prev, p]
+                                    );
+                                    notify(`Adicionado ao Fallback: ${p.host}:${p.port}`);
+                                  }}
+                                >
+                                  + Fallback
+                                </button>
+                                <button
+                                  className="btn sm success"
+                                  onClick={() => startWithProxies([p], `${p.host}:${p.port}`)}
+                                >
+                                  Usar
+                                </button>
+                                <button
+                                  className="btn sm"
+                                  onClick={() => removeSavedProxy(k)}
+                                  title="Remover dos salvos"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Seção 2: Nós Ativos no Mihomo (quando conectado) */}
             <div className="row" style={{ justifyContent: "space-between" }}>
               <div className="row">
                 <Globe size={16} />
                 <span>
-                  Ativo: <b>{activeGroup?.now || "Nenhum (inicie pelo Buscador)"}</b>
+                  Mihomo ativo: <b>{activeGroup?.now || "Desconectado"}</b>
                 </span>
               </div>
               <div className="row">

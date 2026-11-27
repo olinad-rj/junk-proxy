@@ -579,6 +579,24 @@ fn scraper_clear_proxies(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn saved_proxies_read(app: AppHandle) -> Result<Vec<ScrapedProxy>, String> {
+    let path = data_dir(&app)?.join("saved_proxies.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| format!("saved_proxies.json inválido: {e}"))
+}
+
+#[tauri::command]
+fn saved_proxies_save(app: AppHandle, list: Vec<ScrapedProxy>) -> Result<(), String> {
+    let dir = data_dir(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(&list).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("saved_proxies.json"), json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn scraper_read_proxies(app: AppHandle) -> Result<Vec<ScrapedProxy>, String> {
     tauri::async_runtime::spawn_blocking(move || scraper_read_proxies_sync(&app))
         .await
@@ -1104,6 +1122,8 @@ pub fn run() {
             scraper_save_config,
             scraper_read_proxies,
             scraper_clear_proxies,
+            saved_proxies_read,
+            saved_proxies_save,
             core_status,
             core_start,
             core_stop,

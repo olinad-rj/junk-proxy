@@ -13,6 +13,8 @@
 <a id="português"></a>
 ## 🇧🇷 Português
 
+> **Uso Pessoal:** Este projeto foi desenvolvido com foco em **uso pessoal, estudo e conveniência no dia a dia**, reunindo coleta e gerenciamento de proxies públicos em um único aplicativo desktop.
+
 **Junk Proxy** é um aplicativo desktop leve para Windows que reúne coleta, verificação, organização de fallback e aplicação de proxies com interface limpa em **Tauri v2 + React + TypeScript** e núcleo **Mihomo**.
 
 ### Funcionalidades
@@ -47,6 +49,8 @@ npm run tauri build  # instalador Windows (NSIS)
 
 <a id="english"></a>
 ## 🇺🇸 English
+
+> **Personal Use:** This project was built with a focus on **personal use, learning, and everyday convenience**, bringing public proxy scraping and management together in a single desktop app.
 
 **Junk Proxy** is a lightweight Windows desktop application that combines proxy scraping, checking, fallback management, and routing in one clean **Tauri v2 + React + TypeScript** interface powered by **Mihomo**.
 

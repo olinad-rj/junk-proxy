@@ -400,6 +400,9 @@ export default function App() {
   const [killSwitch, setKillSwitch] = useState(false);
   const [bypassLan, setBypassLan] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
+  const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null);
+  const [tcpPings, setTcpPings] = useState<Record<string, number | "timeout">>({});
+  const [pingingTcp, setPingingTcp] = useState<string[]>([]);
   const [fallbackQueue, setFallbackQueue] = useState<ScrapedProxy[]>([]);
   const [fallbackWidth, setFallbackWidth] = useState(300);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -650,6 +653,45 @@ export default function App() {
       await refreshCore();
     } catch (e) {
       notify(String(e));
+    }
+  };
+
+  const toggleRowSelection = (
+    p: ScrapedProxy,
+    idx: number,
+    shiftKey: boolean
+  ) => {
+    if (p.protocol !== "http" && p.protocol !== "socks5") return;
+    const k = pKey(p);
+    if (shiftKey && lastSelectedIdx !== null) {
+      const start = Math.min(lastSelectedIdx, idx);
+      const end = Math.max(lastSelectedIdx, idx);
+      const rangeKeys = filtered
+        .slice(start, end + 1)
+        .filter((item) => item.protocol === "http" || item.protocol === "socks5")
+        .map(pKey);
+      setSelected((prev) => Array.from(new Set([...prev, ...rangeKeys])));
+    } else {
+      setSelected((prev) =>
+        prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]
+      );
+    }
+    setLastSelectedIdx(idx);
+  };
+
+  const pingScraperTcp = async (p: ScrapedProxy) => {
+    const k = pKey(p);
+    setPingingTcp((prev) => (prev.includes(k) ? prev : [...prev, k]));
+    try {
+      const ms = await invoke<number>("ping_proxy_tcp", {
+        host: p.host,
+        port: p.port,
+      });
+      setTcpPings((prev) => ({ ...prev, [k]: ms }));
+    } catch {
+      setTcpPings((prev) => ({ ...prev, [k]: "timeout" }));
+    } finally {
+      setPingingTcp((prev) => prev.filter((x) => x !== k));
     }
   };
 
@@ -1320,20 +1362,31 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.map((p) => {
+                      {filtered.map((p, idx) => {
                         const k = pKey(p);
                         const ok = p.protocol === "http" || p.protocol === "socks5";
+                        const isSel = selectedSet.has(k);
+                        const tcpVal = tcpPings[k];
                         const ms = p.timeout != null ? Math.round(p.timeout) : null;
                         return (
-                          <tr key={k}>
+                          <tr
+                            key={k}
+                            className={`${ok ? "row-clickable" : ""} ${isSel ? "row-selected" : ""}`}
+                            onClick={(e) => {
+                              if ((e.target as HTMLElement).closest("button, input")) return;
+                              toggleRowSelection(p, idx, e.shiftKey);
+                            }}
+                          >
                             <td>
                               <input
                                 type="checkbox"
                                 disabled={!ok}
-                                checked={selectedSet.has(k)}
-                                onChange={() =>
-                                  setSelected((prev) =>
-                                    prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]
+                                checked={isSel}
+                                onChange={(e) =>
+                                  toggleRowSelection(
+                                    p,
+                                    idx,
+                                    (e.nativeEvent as MouseEvent).shiftKey
                                   )
                                 }
                               />
@@ -1353,22 +1406,44 @@ export default function App() {
                               </span>
                             </td>
                             <td>
-                              <span
-                                className={`pill mono ${
-                                  ms == null
-                                    ? ""
-                                    : ms < 300
-                                      ? "green"
-                                      : ms <= 1000
-                                        ? "amber"
-                                        : "red"
-                                }`}
-                              >
-                                {ms != null ? `${ms} ms` : "--"}
-                              </span>
+                              {tcpVal === "timeout" ? (
+                                <span className="pill red mono">Timeout</span>
+                              ) : typeof tcpVal === "number" ? (
+                                <span
+                                  className={`pill mono ${
+                                    tcpVal < 150 ? "green" : tcpVal <= 500 ? "amber" : "red"
+                                  }`}
+                                  title="Ping TCP direto medido agora"
+                                >
+                                  {tcpVal} ms (TCP)
+                                </span>
+                              ) : (
+                                <span
+                                  className={`pill mono ${
+                                    ms == null
+                                      ? ""
+                                      : ms < 300
+                                        ? "green"
+                                        : ms <= 1000
+                                          ? "amber"
+                                          : "red"
+                                  }`}
+                                  title="Tempo total da requisição HTTPS na coleta"
+                                >
+                                  {ms != null ? `${ms} ms` : "--"}
+                                </span>
+                              )}
                             </td>
                             <td style={{ textAlign: "right" }}>
                               <div className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
+                                <button
+                                  className="btn sm"
+                                  disabled={pingingTcp.includes(k)}
+                                  onClick={() => pingScraperTcp(p)}
+                                  title="Medir ping TCP real direto agora"
+                                >
+                                  {pingingTcp.includes(k) ? "..." : "Ping"}
+                                </button>
                                 <button
                                   className="btn sm success"
                                   disabled={!ok}

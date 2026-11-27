@@ -582,6 +582,22 @@ fn mihomo_traffic_sample_sync() -> Result<Value, String> {
 }
 
 #[tauri::command]
+async fn ping_proxy_tcp(host: String, port: u16) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let addr = format!("{host}:{port}");
+        let start = std::time::Instant::now();
+        let sock: std::net::SocketAddr = addr
+            .parse()
+            .map_err(|e| format!("endereço inválido: {e}"))?;
+        TcpStream::connect_timeout(&sock, Duration::from_millis(4000))
+            .map_err(|e| format!("timeout: {e}"))?;
+        Ok(start.elapsed().as_millis() as u64)
+    })
+    .await
+    .map_err(|e| format!("erro interno: {e}"))?
+}
+
+#[tauri::command]
 async fn check_exit_ip(state: State<'_, AppState>) -> Result<Value, String> {
     let via_proxy = is_running(&state.core) && query_system_proxy();
     tauri::async_runtime::spawn_blocking(move || check_exit_ip_sync(via_proxy))
@@ -750,6 +766,7 @@ pub fn run() {
             system_proxy_set,
             mihomo_api,
             mihomo_traffic_sample,
+            ping_proxy_tcp,
             check_exit_ip,
             check_unlock_service,
         ])

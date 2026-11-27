@@ -322,7 +322,16 @@ td {
   font-size: 12.5px;
 }
 tbody tr:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.04);
+}
+tbody tr.row-clickable {
+  cursor: pointer;
+}
+tbody tr.row-selected {
+  background: rgba(59, 130, 246, 0.14);
+}
+tbody tr.row-selected:hover {
+  background: rgba(59, 130, 246, 0.2);
 }
 .mono {
   font-family: ui-monospace, Consolas, monospace;

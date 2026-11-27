@@ -121,13 +121,16 @@ const pKey = (p: ScrapedProxy) => `${p.protocol}-${p.host}-${p.port}`;
 function FlagBadge({ code }: { code?: string | null }) {
   const [failed, setFailed] = useState(false);
   const clean = code?.trim().toLowerCase();
+  useEffect(() => {
+    setFailed(false);
+  }, [clean]);
   if (!clean || clean.length !== 2 || failed) {
     return <span className="flag-code">{clean ? clean.toUpperCase() : "--"}</span>;
   }
   return (
     <img
       className="flag-img"
-      src={`https://flagcdn.com/20x15/${clean}.png`}
+      src={`https://flagcdn.com/${clean}.svg`}
       alt={clean.toUpperCase()}
       loading="lazy"
       onError={() => setFailed(true)}

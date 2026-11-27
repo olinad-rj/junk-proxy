@@ -474,12 +474,12 @@ tbody tr.row-selected:hover {
   min-width: 22px;
 }
 .flag-img {
-  width: 18px;
-  height: 13px;
+  width: 20px;
+  height: 14px;
   border-radius: 2px;
   object-fit: cover;
   flex: none;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 .flag-code {
   display: inline-flex;

@@ -1,0 +1,26 @@
+[package]
+name = "junk-proxy"
+version = "1.0.0"
+edition = "2021"
+description = "Junk Proxy — Buscador, Aplicador Mihomo, Testes e Tráfego"
+
+[lib]
+name = "junk_proxy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows-sys = { version = "0.60", features = ["Win32_Networking_WinInet", "Win32_Foundation"] }
+
+[profile.release]
+strip = true
+lto = false
+incremental = true

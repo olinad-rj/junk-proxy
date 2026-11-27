@@ -403,6 +403,8 @@ export default function App() {
   const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null);
   const [tcpPings, setTcpPings] = useState<Record<string, number | "timeout">>({});
   const [pingingTcp, setPingingTcp] = useState<string[]>([]);
+  const [batchPingProgress, setBatchPingProgress] = useState<{ done: number; total: number } | null>(null);
+  const batchPingAbortRef = useRef(false);
   const [fallbackQueue, setFallbackQueue] = useState<ScrapedProxy[]>([]);
   const [fallbackWidth, setFallbackWidth] = useState(300);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -482,10 +484,17 @@ export default function App() {
     const u1 = listen<string>("scraper-log", (e) => {
       setLogs((prev) => [...prev.slice(-199), e.payload]);
     });
-    const u2 = listen("scraper-finished", () => {
+    const u2 = listen("scraper-finished", async () => {
       setScraping(false);
-      void refreshProxies();
-      notify("Coleta finalizada!");
+      setTcpPings({});
+      notify("Coleta finalizada! Medindo ping real (10 por vez)...");
+      try {
+        const list = await invoke<ScrapedProxy[]>("scraper_list_proxies");
+        setProxies(list);
+        void pingBatchReal(list.slice(0, 50));
+      } catch (e) {
+        notify(String(e));
+      }
     });
     const u3 = listen("core-stopped", () => {
       void refreshCore();
@@ -574,7 +583,11 @@ export default function App() {
         (p.country_code?.toUpperCase() ?? "") !== country.toUpperCase()
       )
         return false;
-      if (hasMax && (p.timeout == null || p.timeout > parsedMax)) return false;
+      if (hasMax) {
+        const real = tcpPings[pKey(p)];
+        const msVal = typeof real === "number" ? real : p.timeout;
+        if (msVal == null || msVal > parsedMax) return false;
+      }
       if (!q) return true;
       return (
         p.host.toLowerCase().includes(q) ||
@@ -584,7 +597,7 @@ export default function App() {
         (p.country_code?.toLowerCase().includes(q) ?? false)
       );
     });
-  }, [proxies, search, proto, country, maxMs, hideTransparent]);
+  }, [proxies, search, proto, country, maxMs, hideTransparent, tcpPings]);
 
   const compatVisible = useMemo(
     () => filtered.filter((p) => p.protocol === "http" || p.protocol === "socks5"),
@@ -681,7 +694,7 @@ export default function App() {
     setLastSelectedIdx(idx);
   };
 
-  const pingScraperHttp = async (p: ScrapedProxy) => {
+  const pingScraperHttp = useCallback(async (p: ScrapedProxy) => {
     const k = pKey(p);
     setPingingTcp((prev) => (prev.includes(k) ? prev : [...prev, k]));
     try {
@@ -696,7 +709,27 @@ export default function App() {
     } finally {
       setPingingTcp((prev) => prev.filter((x) => x !== k));
     }
-  };
+  }, []);
+
+  const pingBatchReal = useCallback(
+    async (list: ScrapedProxy[]) => {
+      if (list.length === 0) return;
+      batchPingAbortRef.current = false;
+      setBatchPingProgress({ done: 0, total: list.length });
+      const BATCH_SIZE = 10;
+      for (let i = 0; i < list.length; i += BATCH_SIZE) {
+        if (batchPingAbortRef.current) break;
+        const chunk = list.slice(i, i + BATCH_SIZE);
+        await Promise.all(chunk.map((p) => pingScraperHttp(p)));
+        setBatchPingProgress({
+          done: Math.min(i + chunk.length, list.length),
+          total: list.length,
+        });
+      }
+      setBatchPingProgress(null);
+    },
+    [pingScraperHttp]
+  );
 
   const handleUseInFallback = async () => {
     const list =
@@ -1243,6 +1276,23 @@ export default function App() {
                     {selected.length > 0
                       ? `Usar Selecionados em Fallback (${selected.length})`
                       : "Usar Todos em Fallback"}
+                  </button>
+                  <button
+                    className={`btn ${batchPingProgress ? "danger" : ""}`}
+                    disabled={!batchPingProgress && filtered.length === 0}
+                    onClick={() => {
+                      if (batchPingProgress) {
+                        batchPingAbortRef.current = true;
+                      } else {
+                        void pingBatchReal(filtered.slice(0, 100));
+                      }
+                    }}
+                    title="Mede a latência real (generate_204) de 10 em 10 proxies sem congestionamento"
+                  >
+                    <Zap size={14} />{" "}
+                    {batchPingProgress
+                      ? `Parar Ping (${batchPingProgress.done}/${batchPingProgress.total})`
+                      : "Ping Real 10x"}
                   </button>
                   <button
                     className="btn"

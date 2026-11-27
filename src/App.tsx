@@ -1292,6 +1292,10 @@ export default function App() {
                     <button
                       className="btn primary"
                       onClick={() => {
+                        batchPingAbortRef.current = true;
+                        setProxies([]);
+                        setSelected([]);
+                        setTcpPings({});
                         setLogs([]);
                         setLogsOpen(true);
                         setScraping(true);
@@ -1363,6 +1367,7 @@ export default function App() {
                       await invoke("scraper_clear_proxies").catch(() => {});
                       setProxies([]);
                       setSelected([]);
+                      setTcpPings({});
                       notify("Lista do buscador limpa");
                     }}
                   >

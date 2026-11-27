@@ -219,6 +219,11 @@ fn scraper_start(app: AppHandle, state: State<AppState>) -> Result<(), String> {
         return Err("Coleta já está em execução.".into());
     }
     let (data, cfg) = ensure_scraper_config(&app)?;
+    // Remove resultados da coleta anterior para não exibir proxies antigos se a busca for parada.
+    let old_out = data.join("out").join("proxies.json");
+    if old_out.exists() {
+        let _ = std::fs::remove_file(&old_out);
+    }
     let bin = resource_file(&app, "proxy-scraper-checker.exe")?;
     let mut cmd = Command::new(bin);
     cmd.current_dir(&data)

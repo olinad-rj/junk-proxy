@@ -637,22 +637,28 @@ fn scraper_read_proxies_sync(app: &AppHandle) -> Result<Vec<ScrapedProxy>, Strin
         if protocol.is_empty() || host.is_empty() || port == 0 {
             continue;
         }
-        let timeout = item
-            .get("timeout")
-            .and_then(Value::as_f64)
-            .map(|s| (s * 1000.0).round());
+        let is_maxmind_raw = item.pointer("/geolocation").is_some();
+        let timeout = item.get("timeout").and_then(Value::as_f64).map(|s| {
+            if is_maxmind_raw {
+                (s * 1000.0).round()
+            } else {
+                s.round()
+            }
+        });
         out.push(ScrapedProxy {
             protocol,
             host,
             port,
             timeout,
             country_code: item
-                .pointer("/geolocation/country/iso_code")
+                .get("country_code")
+                .or_else(|| item.pointer("/geolocation/country/iso_code"))
                 .or_else(|| item.pointer("/geolocation/registered_country/iso_code"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             country_name: item
-                .pointer("/geolocation/country/names/en")
+                .get("country_name")
+                .or_else(|| item.pointer("/geolocation/country/names/en"))
                 .or_else(|| item.pointer("/geolocation/registered_country/names/en"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
@@ -739,7 +745,7 @@ async fn core_start(
     let g_fallback = "Fallback";
     let g_fast = "Mais Rapido";
     let g_main = "Conexao";
-    let delay_url = "http://www.gstatic.com/generate_204";
+    let delay_url = "https://www.gstatic.com/generate_204";
 
     let mut yaml = format!(
         "mixed-port: {MIXED_PORT}\nexternal-controller: {CONTROLLER}\nmode: rule\nlog-level: warning\nallow-lan: false\nunified-delay: true\ntcp-concurrent: true\n"
@@ -927,7 +933,7 @@ fn ping_proxy_http_sync(protocol: &str, host: &str, port: u16) -> Result<u64, St
         .arg("5")
         .arg("-x")
         .arg(&proxy_url)
-        .arg("http://www.gstatic.com/generate_204");
+        .arg("https://www.gstatic.com/generate_204");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt as _;

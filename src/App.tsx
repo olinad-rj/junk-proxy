@@ -422,7 +422,7 @@ export default function App() {
       return [];
     }
   });
-  const [fallbackWidth, setFallbackWidth] = useState(300);
+  const [fallbackWidth, setFallbackWidth] = useState(260);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOffsetY, setDragOffsetY] = useState(0);
   const fbListRef = useRef<HTMLDivElement | null>(null);
@@ -680,6 +680,7 @@ export default function App() {
       setNodeDelays({});
       await refreshCore();
       await refreshMihomoProxies();
+      window.setTimeout(() => void checkExitIp(), 1200);
       notify(`Conectado (${label}: ${res.nodes} nós)`);
     } catch (e) {
       notify(String(e));
@@ -1003,8 +1004,8 @@ export default function App() {
     try {
       const isGroup = name === "Fallback" || name === "Mais Rapido";
       const endpoint = isGroup
-        ? `/group/${encodeURIComponent(name)}/delay?timeout=5000&url=${encodeURIComponent("http://www.gstatic.com/generate_204")}`
-        : `/proxies/${encodeURIComponent(name)}/delay?timeout=5000&url=${encodeURIComponent("http://www.gstatic.com/generate_204")}`;
+        ? `/group/${encodeURIComponent(name)}/delay?timeout=5000&url=${encodeURIComponent("https://www.gstatic.com/generate_204")}`
+        : `/proxies/${encodeURIComponent(name)}/delay?timeout=5000&url=${encodeURIComponent("https://www.gstatic.com/generate_204")}`;
       const res = await invoke<{ delay?: number; message?: string } | Record<string, number>>(
         "mihomo_api",
         { method: "GET", path: endpoint, body: null }
@@ -1207,7 +1208,7 @@ export default function App() {
         {tab === "home" && (
           <div className="content">
             <div className="split-scraper" style={{ flex: 1, minHeight: 0 }}>
-              <div className="split-left" style={{ gap: 12 }}>
+              <div className="split-left" style={{ gap: 12, overflowY: "auto", paddingRight: 4 }}>
                 <div className="grid2">
                   {/* Card completo de Informações de IP */}
                   <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10 }}>

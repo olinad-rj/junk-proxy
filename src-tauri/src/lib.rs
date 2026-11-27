@@ -272,17 +272,9 @@ async fn scraper_read_proxies(app: AppHandle) -> Result<Vec<ScrapedProxy>, Strin
 }
 
 fn scraper_read_proxies_sync(app: &AppHandle) -> Result<Vec<ScrapedProxy>, String> {
-    let mut path = data_dir(app)?.join("out").join("proxies.json");
+    let path = data_dir(app)?.join("out").join("proxies.json");
     if !path.exists() {
-        let fallback = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("out")
-            .join("proxies.json");
-        if fallback.exists() {
-            path = fallback;
-        } else {
-            return Ok(Vec::new());
-        }
+        return Ok(Vec::new());
     }
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let parsed: Value =

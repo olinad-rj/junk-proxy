@@ -488,27 +488,42 @@ export default function App() {
     const u1 = listen<string>("scraper-log", (e) => {
       setLogs((prev) => [...prev.slice(-199), e.payload]);
     });
-    const u2 = listen("scraper-finished", async () => {
+    const u2 = listen("scraper-finished", () => {
       setScraping(false);
-      setTcpPings({});
-      notify("Coleta finalizada! Medindo ping real (10 por vez)...");
-      try {
-        const list = await invoke<ScrapedProxy[]>("scraper_list_proxies");
-        setProxies(list);
-        const compat = list.filter(
-          (p) => p.protocol === "http" || p.protocol === "socks5"
-        );
-        void pingBatchReal(compat);
-      } catch (e) {
-        notify(String(e));
-      }
+      void refreshProxies();
+      notify("Coleta finalizada!");
     });
+    const uProxy = listen<ScrapedProxy>("scraper-proxy", (e) => {
+      const item = e.payload;
+      setProxies((prev) => {
+        const k = `${item.protocol}://${item.host}:${item.port}`;
+        if (prev.some((x) => `${x.protocol}://${x.host}:${x.port}` === k)) {
+          return prev;
+        }
+        return [...prev, item];
+      });
+    });
+    const uGeo = listen<Record<string, { code: string; name: string }>>(
+      "scraper-countries",
+      (e) => {
+        const map = e.payload;
+        if (!map) return;
+        setProxies((prev) =>
+          prev.map((p) => {
+            const g = map[p.host];
+            return g ? { ...p, country_code: g.code, country_name: g.name } : p;
+          })
+        );
+      }
+    );
     const u3 = listen("core-stopped", () => {
       void refreshCore();
     });
     return () => {
       void u1.then((f) => f());
       void u2.then((f) => f());
+      void uProxy.then((f) => f());
+      void uGeo.then((f) => f());
       void u3.then((f) => f());
     };
   }, [checkExitIp, notify, refreshCore, refreshProxies]);
@@ -554,15 +569,6 @@ export default function App() {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs]);
-
-  // Poll proxies list every 3s while scraping is active
-  useEffect(() => {
-    if (!scraping) return;
-    const id = window.setInterval(() => {
-      void refreshProxies();
-    }, 3000);
-    return () => window.clearInterval(id);
-  }, [scraping, refreshProxies]);
 
   const countries = useMemo(() => {
     const map = new Map<string, { name: string; count: number }>();
@@ -1299,7 +1305,7 @@ export default function App() {
                         setLogs([]);
                         setLogsOpen(true);
                         setScraping(true);
-                        void invoke("scraper_start").catch((e) => {
+                        void invoke("scraper_start", { batchSize: pingBatchSize }).catch((e) => {
                           setScraping(false);
                           notify(String(e));
                         });

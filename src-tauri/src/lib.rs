@@ -2,12 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
@@ -23,6 +24,8 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct AppState {
     scraper: Mutex<Option<Child>>,
+    scraper_active: Arc<AtomicBool>,
+    scraper_cancel: Arc<AtomicBool>,
     core: Mutex<Option<Child>>,
 }
 
@@ -210,35 +213,346 @@ fn ensure_scraper_config(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> 
 
 #[tauri::command]
 fn scraper_status(state: State<AppState>) -> bool {
-    is_running(&state.scraper)
+    state.scraper_active.load(Ordering::SeqCst) || is_running(&state.scraper)
+}
+
+fn make_scrape_only_config(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for line in raw.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("check_url") {
+            out.push_str("check_url = \"\"\n");
+        } else if trimmed.starts_with("include_asn") {
+            out.push_str("include_asn = false\n");
+        } else if trimmed.starts_with("include_geolocation") {
+            out.push_str("include_geolocation = false\n");
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn write_proxies_json_sync(path: &PathBuf, list: &[ScrapedProxy]) {
+    let mut sorted = list.to_vec();
+    sorted.sort_by(|a, b| {
+        a.timeout
+            .unwrap_or(f64::MAX)
+            .total_cmp(&b.timeout.unwrap_or(f64::MAX))
+    });
+    if let Ok(json) = serde_json::to_string(&sorted) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn geolocate_batch_sync(ips: &[String]) -> HashMap<String, (String, String)> {
+    let mut out = HashMap::new();
+    if ips.is_empty() {
+        return out;
+    }
+    let body = match serde_json::to_string(ips) {
+        Ok(b) => b,
+        Err(_) => return out,
+    };
+    let mut cmd = Command::new("curl.exe");
+    cmd.arg("-s")
+        .arg("-X")
+        .arg("POST")
+        .arg("http://ip-api.com/batch?fields=query,countryCode,country")
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("--max-time")
+        .arg("5")
+        .arg("-d")
+        .arg(&body);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if let Ok(res) = cmd.output() {
+        if let Ok(arr) = serde_json::from_slice::<Vec<Value>>(&res.stdout) {
+            for item in arr {
+                let q = item.get("query").and_then(Value::as_str).unwrap_or("");
+                let cc = item.get("countryCode").and_then(Value::as_str).unwrap_or("");
+                let cn = item.get("country").and_then(Value::as_str).unwrap_or("");
+                if !q.is_empty() && !cc.is_empty() {
+                    out.insert(q.to_string(), (cc.to_string(), cn.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn flush_geo_sync(
+    app: &AppHandle,
+    out_path: &PathBuf,
+    found: &Mutex<Vec<ScrapedProxy>>,
+    pending_ips: &mut Vec<String>,
+) {
+    if !pending_ips.is_empty() {
+        let batch: Vec<String> = pending_ips.drain(..).collect();
+        let geo = geolocate_batch_sync(&batch);
+        if !geo.is_empty() {
+            let mut updates = serde_json::Map::new();
+            if let Ok(mut list) = found.lock() {
+                for p in list.iter_mut() {
+                    if let Some((cc, cn)) = geo.get(&p.host) {
+                        p.country_code = Some(cc.clone());
+                        p.country_name = Some(cn.clone());
+                        updates.insert(p.host.clone(), json!({ "code": cc, "name": cn }));
+                    }
+                }
+                write_proxies_json_sync(out_path, &list);
+            }
+            if !updates.is_empty() {
+                let _ = app.emit("scraper-countries", Value::Object(updates));
+            }
+            return;
+        }
+    }
+    if let Ok(list) = found.lock() {
+        write_proxies_json_sync(out_path, &list);
+    }
 }
 
 #[tauri::command]
-fn scraper_start(app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    if is_running(&state.scraper) {
+fn scraper_start(
+    app: AppHandle,
+    state: State<AppState>,
+    batch_size: Option<usize>,
+) -> Result<(), String> {
+    if state.scraper_active.swap(true, Ordering::SeqCst) {
         return Err("Coleta já está em execução.".into());
     }
+    state.scraper_cancel.store(false, Ordering::SeqCst);
+
     let (data, cfg) = ensure_scraper_config(&app)?;
-    // Remove resultados da coleta anterior para não exibir proxies antigos se a busca for parada.
-    let old_out = data.join("out").join("proxies.json");
-    if old_out.exists() {
-        let _ = std::fs::remove_file(&old_out);
+    let out_path = data.join("out").join("proxies.json");
+    if out_path.exists() {
+        let _ = std::fs::remove_file(&out_path);
     }
+
+    let raw_cfg = std::fs::read_to_string(&cfg).map_err(|e| e.to_string())?;
+    let scrape_cfg = data.join("scrape_only.toml");
+    std::fs::write(&scrape_cfg, make_scrape_only_config(&raw_cfg)).map_err(|e| e.to_string())?;
     let bin = resource_file(&app, "proxy-scraper-checker.exe")?;
-    let mut cmd = Command::new(bin);
-    cmd.current_dir(&data)
-        .env("PROXY_SCRAPER_CHECKER_CONFIG", &cfg)
-        .env_remove("HTTP_PROXY")
-        .env_remove("HTTPS_PROXY")
-        .env_remove("ALL_PROXY")
-        .env_remove("http_proxy")
-        .env_remove("https_proxy")
-        .env_remove("all_proxy");
-    spawn_logged(&app, &state.scraper, cmd, "scraper-log", Some("scraper-finished"))
+
+    let active = Arc::clone(&state.scraper_active);
+    let cancel = Arc::clone(&state.scraper_cancel);
+    let workers = batch_size.unwrap_or(10).clamp(5, 50);
+
+    thread::spawn(move || {
+        let _ = app.emit("scraper-log", "Etapa 1: baixando listas de proxies...".to_string());
+        let mut cmd = Command::new(&bin);
+        cmd.current_dir(&data)
+            .env("PROXY_SCRAPER_CHECKER_CONFIG", &scrape_cfg)
+            .env_remove("HTTP_PROXY")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("ALL_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        if let Ok(mut child) = cmd.spawn() {
+            let stdout = child.stdout.take();
+            let app_log = app.clone();
+            let log_h = stdout.map(|out| {
+                thread::spawn(move || {
+                    for line in BufReader::new(out).lines().map_while(Result::ok) {
+                        let _ = app_log.emit("scraper-log", line);
+                    }
+                })
+            });
+            {
+                let st = app.state::<AppState>();
+                if let Ok(mut g) = st.scraper.lock() {
+                    *g = Some(child);
+                };
+            }
+            loop {
+                let done = {
+                    let st = app.state::<AppState>();
+                    let mut g = st.scraper.lock().ok();
+                    if let Some(Some(ref mut ch)) = g.as_deref_mut() {
+                        matches!(ch.try_wait(), Ok(Some(_)) | Err(_))
+                    } else {
+                        true
+                    }
+                };
+                if done {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(120));
+            }
+            {
+                let st = app.state::<AppState>();
+                if let Ok(mut g) = st.scraper.lock() {
+                    *g = None;
+                };
+            }
+            if let Some(h) = log_h {
+                let _ = h.join();
+            }
+        }
+
+        if cancel.load(Ordering::SeqCst) {
+            let _ = std::fs::remove_file(&out_path);
+            let _ = app.emit("scraper-log", "Coleta interrompida pelo usuário.".to_string());
+            active.store(false, Ordering::SeqCst);
+            let _ = app.emit("scraper-finished", ());
+            return;
+        }
+
+        let candidates = scraper_read_proxies_sync(&app).unwrap_or_default();
+        let _ = std::fs::remove_file(&out_path);
+        if candidates.is_empty() {
+            let _ = app.emit("scraper-log", "Nenhum proxy encontrado nas listas.".to_string());
+            active.store(false, Ordering::SeqCst);
+            let _ = app.emit("scraper-finished", ());
+            return;
+        }
+
+        // Prioriza HTTP e SOCKS5 (usados pelo Mihomo) antes de SOCKS4.
+        let mut ordered = Vec::with_capacity(candidates.len());
+        let mut s4 = Vec::new();
+        for c in candidates {
+            if c.protocol == "http" || c.protocol == "socks5" {
+                ordered.push(c);
+            } else {
+                s4.push(c);
+            }
+        }
+        ordered.extend(s4);
+
+        let total = ordered.len();
+        let _ = app.emit(
+            "scraper-log",
+            format!(
+                "Etapa 2: {total} proxies coletados. Testando ao vivo (TCP + generate_204, {workers} por vez)..."
+            ),
+        );
+
+        let tcp_idx = AtomicUsize::new(0);
+        let tcp_done = AtomicUsize::new(0);
+        let working_count = AtomicUsize::new(0);
+        let found = Mutex::new(Vec::<ScrapedProxy>::new());
+        let geo_queue = Mutex::new(Vec::<String>::new());
+        let (tx, rx) = mpsc::sync_channel::<ScrapedProxy>(64);
+        let rx = Mutex::new(rx);
+
+        thread::scope(|s| {
+            let ordered_ref = &ordered;
+            let cancel_ref = &cancel;
+            let app_ref = &app;
+            let tcp_idx_ref = &tcp_idx;
+            let tcp_done_ref = &tcp_done;
+            let working_ref = &working_count;
+
+            for _ in 0..140 {
+                let tx_c = tx.clone();
+                s.spawn(move || loop {
+                    if cancel_ref.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let i = tcp_idx_ref.fetch_add(1, Ordering::Relaxed);
+                    if i >= total {
+                        break;
+                    }
+                    let p = &ordered_ref[i];
+                    let addr = format!("{}:{}", p.host, p.port);
+                    if let Ok(mut addrs) = addr.to_socket_addrs() {
+                        if let Some(sa) = addrs.next() {
+                            if TcpStream::connect_timeout(&sa, Duration::from_millis(2000)).is_ok()
+                                && !cancel_ref.load(Ordering::SeqCst)
+                            {
+                                let _ = tx_c.send(p.clone());
+                            }
+                        }
+                    }
+                    let done = tcp_done_ref.fetch_add(1, Ordering::Relaxed) + 1;
+                    if done % 1000 == 0 || done == total {
+                        let w = working_ref.load(Ordering::Relaxed);
+                        let _ = app_ref.emit(
+                            "scraper-log",
+                            format!("Testados {done}/{total} | {w} WORKING (ao vivo)"),
+                        );
+                    }
+                });
+            }
+            drop(tx);
+
+            let rx_ref = &rx;
+            let found_ref = &found;
+            let geo_ref = &geo_queue;
+            let out_ref = &out_path;
+            for _ in 0..workers {
+                s.spawn(move || loop {
+                    if cancel_ref.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let next = {
+                        let guard = rx_ref.lock().ok();
+                        guard.and_then(|g| g.recv().ok())
+                    };
+                    let Some(mut p) = next else { break };
+                    if cancel_ref.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if let Ok(ms) = ping_proxy_http_sync(&p.protocol, &p.host, p.port) {
+                        p.timeout = Some(ms as f64);
+                        working_ref.fetch_add(1, Ordering::Relaxed);
+                        let _ = app_ref.emit("scraper-proxy", &p);
+                        let mut batch_to_geo = Vec::new();
+                        if let Ok(mut list) = found_ref.lock() {
+                            list.push(p.clone());
+                        }
+                        if let Ok(mut gq) = geo_ref.lock() {
+                            gq.push(p.host.clone());
+                            if gq.len() >= 20 {
+                                batch_to_geo = gq.drain(..).collect();
+                            }
+                        }
+                        if !batch_to_geo.is_empty() {
+                            flush_geo_sync(app_ref, out_ref, found_ref, &mut batch_to_geo);
+                        }
+                    }
+                });
+            }
+        });
+
+        let mut leftover_geo = geo_queue
+            .lock()
+            .map(|mut g| g.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        flush_geo_sync(&app, &out_path, &found, &mut leftover_geo);
+
+        let total_w = working_count.load(Ordering::Relaxed);
+        let msg = if cancel.load(Ordering::SeqCst) {
+            format!("Busca parada: {total_w} proxies WORKING mantidos.")
+        } else {
+            format!("Finalizado: {total_w} proxies WORKING encontrados.")
+        };
+        let _ = app.emit("scraper-log", msg);
+        active.store(false, Ordering::SeqCst);
+        let _ = app.emit("scraper-finished", ());
+    });
+
+    Ok(())
 }
 
 #[tauri::command]
 fn scraper_stop(state: State<AppState>) -> Result<(), String> {
+    state.scraper_cancel.store(true, Ordering::SeqCst);
     stop_child(&state.scraper);
     Ok(())
 }
@@ -578,48 +892,50 @@ fn mihomo_traffic_sample_sync() -> Result<Value, String> {
     Ok(json!({ "up": 0, "down": 0 }))
 }
 
+fn ping_proxy_http_sync(protocol: &str, host: &str, port: u16) -> Result<u64, String> {
+    let scheme = match protocol.to_ascii_lowercase().as_str() {
+        "socks5" => "socks5h",
+        "socks4" => "socks4a",
+        _ => "http",
+    };
+    let proxy_url = format!("{scheme}://{host}:{port}");
+    let mut cmd = Command::new("curl.exe");
+    cmd.arg("-s")
+        .arg("-o")
+        .arg("NUL")
+        .arg("-w")
+        .arg("%{http_code} %{time_pretransfer} %{time_starttransfer} %{time_total}")
+        .arg("--max-time")
+        .arg("5")
+        .arg("-x")
+        .arg(&proxy_url)
+        .arg("http://www.gstatic.com/generate_204");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().map_err(|e| format!("falha curl: {e}"))?;
+    let raw = String::from_utf8_lossy(&out.stdout).replace(',', ".");
+    let mut parts = raw.split_whitespace();
+    let code: u16 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let pre: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let start_t: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let total: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    if (200..400).contains(&code) {
+        // Exclui overhead de spawn do curl e handshake inicial, alinhado ao unified-delay do Mihomo.
+        let rtt_s = if start_t > pre { start_t - pre } else { total };
+        Ok((rtt_s * 1000.0).round().max(1.0) as u64)
+    } else {
+        Err(format!("falhou (HTTP {code})"))
+    }
+}
+
 #[tauri::command]
 async fn ping_proxy_http(protocol: String, host: String, port: u16) -> Result<u64, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let scheme = match protocol.to_ascii_lowercase().as_str() {
-            "socks5" => "socks5h",
-            "socks4" => "socks4a",
-            _ => "http",
-        };
-        let proxy_url = format!("{scheme}://{host}:{port}");
-        let mut cmd = Command::new("curl.exe");
-        cmd.arg("-s")
-            .arg("-o")
-            .arg("NUL")
-            .arg("-w")
-            .arg("%{http_code} %{time_pretransfer} %{time_starttransfer} %{time_total}")
-            .arg("--max-time")
-            .arg("5")
-            .arg("-x")
-            .arg(&proxy_url)
-            .arg("http://www.gstatic.com/generate_204");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt as _;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        let out = cmd.output().map_err(|e| format!("falha curl: {e}"))?;
-        let raw = String::from_utf8_lossy(&out.stdout).replace(',', ".");
-        let mut parts = raw.split_whitespace();
-        let code: u16 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let pre: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-        let start_t: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-        let total: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-        if (200..400).contains(&code) {
-            // Exclui overhead de spawn do curl e handshake inicial, alinhado ao unified-delay do Mihomo.
-            let rtt_s = if start_t > pre { start_t - pre } else { total };
-            Ok((rtt_s * 1000.0).round().max(1.0) as u64)
-        } else {
-            Err(format!("falhou (HTTP {code})"))
-        }
-    })
-    .await
-    .map_err(|e| format!("erro interno: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || ping_proxy_http_sync(&protocol, &host, port))
+        .await
+        .map_err(|e| format!("erro interno: {e}"))?
 }
 
 #[tauri::command]
@@ -737,6 +1053,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(AppState {
             scraper: Mutex::new(None),
+            scraper_active: Arc::new(AtomicBool::new(false)),
+            scraper_cancel: Arc::new(AtomicBool::new(false)),
             core: Mutex::new(None),
         })
         .setup(|app| {
@@ -753,6 +1071,7 @@ pub fn run() {
                     "quit" => {
                         IS_EXITING.store(true, Ordering::SeqCst);
                         let state = app_handle.state::<AppState>();
+                        state.scraper_cancel.store(true, Ordering::SeqCst);
                         let _ = apply_system_proxy(false);
                         stop_child(&state.core);
                         stop_child(&state.scraper);

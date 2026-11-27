@@ -791,6 +791,13 @@ export default function App() {
         void invoke("saved_proxies_save", { list: next }).catch(() => {});
         return next;
       });
+      setProxyLists((prev) => {
+        if (!prev.some((l) => l.proxies.some((x) => pKey(x) === k))) return prev;
+        return prev.map((l) => ({
+          ...l,
+          proxies: l.proxies.map((x) => (pKey(x) === k ? { ...x, timeout: ms } : x)),
+        }));
+      });
     } catch {
       setTcpPings((prev) => ({ ...prev, [k]: "timeout" }));
     } finally {
@@ -1886,6 +1893,7 @@ export default function App() {
                             className={`${ok ? "row-clickable" : ""} ${isSel ? "row-selected" : ""}`}
                             onClick={(e) => {
                               if ((e.target as HTMLElement).closest("button, input")) return;
+                              if (window.getSelection()?.toString()) return;
                               toggleRowSelection(p, idx, e.shiftKey);
                             }}
                           >
@@ -2002,15 +2010,27 @@ export default function App() {
                       Log da Coleta ({logs.length} linhas) — {logsOpen ? "recolher" : "expandir"}
                     </span>
                     {logs.length > 0 && (
-                      <button
-                        className="btn sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setLogs([]);
-                        }}
-                      >
-                        Limpar
-                      </button>
+                      <div className="row" style={{ gap: 6 }}>
+                        <button
+                          className="btn sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void navigator.clipboard.writeText(logs.join("\n"));
+                            notify("Logs copiados!");
+                          }}
+                        >
+                          <Copy size={12} /> Copiar
+                        </button>
+                        <button
+                          className="btn sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLogs([]);
+                          }}
+                        >
+                          Limpar
+                        </button>
+                      </div>
                     )}
                   </div>
                   {logsOpen && (
@@ -2145,6 +2165,25 @@ export default function App() {
                     {batchPingProgress
                       ? `Parar (${batchPingProgress.done}/${batchPingProgress.total})`
                       : "Retestar Ping Real (sem buscar)"}
+                  </button>
+                  <button
+                    className="btn danger"
+                    disabled={savedProxies.length === 0}
+                    onClick={() => {
+                      let removed = 0;
+                      setSavedProxies((prev) => {
+                        const next = prev.filter((p) => {
+                          const fail = tcpPings[pKey(p)] === "timeout";
+                          if (fail) removed++;
+                          return !fail;
+                        });
+                        void invoke("saved_proxies_save", { list: next }).catch(() => {});
+                        return next;
+                      });
+                      notify(`${removed} proxy(s) que falharam removido(s)`);
+                    }}
+                  >
+                    <Trash2 size={14} /> Apagar Falhos
                   </button>
                   <button
                     className="btn success"

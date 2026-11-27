@@ -336,6 +336,8 @@ tbody tr.row-selected:hover {
 .mono {
   font-family: ui-monospace, Consolas, monospace;
   font-variant-numeric: tabular-nums;
+  user-select: text;
+  cursor: text;
 }
 
 .log-box {
@@ -348,6 +350,8 @@ tbody tr.row-selected:hover {
   font: 11.5px/1.45 ui-monospace, Consolas, monospace;
   color: var(--muted);
   white-space: pre-wrap;
+  user-select: text;
+  cursor: text;
 }
 
 .toast {
@@ -360,6 +364,7 @@ tbody tr.row-selected:hover {
   border-radius: 8px;
   font-size: 12.5px;
   z-index: 50;
+  user-select: text;
 }
 
 .split-scraper {
@@ -462,6 +467,7 @@ tbody tr.row-selected:hover {
   overflow-wrap: anywhere;
   gap: 6px;
   line-height: 1.65;
+  user-select: text;
 }
 .ip-label {
   color: var(--muted);

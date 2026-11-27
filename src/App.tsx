@@ -606,6 +606,7 @@ export default function App() {
         bypassLan,
         tunMode,
       });
+      setNodeDelays({});
       await refreshCore();
       await refreshMihomoProxies();
       notify(`Conectado (${label}: ${res.nodes} nós)`);
@@ -617,6 +618,7 @@ export default function App() {
   const handleDisconnect = async () => {
     try {
       await invoke("core_stop");
+      setNodeDelays({});
       await refreshCore();
       setMihomoGroups({});
       notify("Desconectado e Proxy do Sistema desligado");
@@ -800,7 +802,20 @@ export default function App() {
         "mihomo_api",
         { method: "GET", path: endpoint, body: null }
       );
-      if (!isGroup) {
+      if (isGroup) {
+        const map = res as Record<string, number>;
+        if (map && typeof map === "object") {
+          setNodeDelays((prev) => {
+            const next = { ...prev };
+            for (const [k, v] of Object.entries(map)) {
+              if (typeof v === "number") {
+                next[k] = v > 0 ? v : "timeout";
+              }
+            }
+            return next;
+          });
+        }
+      } else {
         const d = (res as { delay?: number })?.delay;
         setNodeDelays((prev) => ({
           ...prev,

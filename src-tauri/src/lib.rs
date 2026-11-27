@@ -590,13 +590,12 @@ async fn ping_proxy_http(protocol: String, host: String, port: u16) -> Result<u6
             _ => "http",
         };
         let proxy_url = format!("{scheme}://{host}:{port}");
-        let start = std::time::Instant::now();
         let mut cmd = Command::new("curl.exe");
         cmd.arg("-s")
             .arg("-o")
             .arg("NUL")
             .arg("-w")
-            .arg("%{http_code}")
+            .arg("%{http_code} %{time_pretransfer} %{time_starttransfer} %{time_total}")
             .arg("--max-time")
             .arg("5")
             .arg("-x")
@@ -608,12 +607,16 @@ async fn ping_proxy_http(protocol: String, host: String, port: u16) -> Result<u6
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
         let out = cmd.output().map_err(|e| format!("falha curl: {e}"))?;
-        let code: u16 = String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0);
+        let raw = String::from_utf8_lossy(&out.stdout).replace(',', ".");
+        let mut parts = raw.split_whitespace();
+        let code: u16 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let pre: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let start_t: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let total: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
         if (200..400).contains(&code) {
-            Ok(start.elapsed().as_millis() as u64)
+            // Exclui overhead de spawn do curl e handshake inicial, alinhado ao unified-delay do Mihomo.
+            let rtt_s = if start_t > pre { start_t - pre } else { total };
+            Ok((rtt_s * 1000.0).round().max(1.0) as u64)
         } else {
             Err(format!("falhou (HTTP {code})"))
         }

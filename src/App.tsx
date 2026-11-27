@@ -498,7 +498,7 @@ export default function App() {
         const compat = list.filter(
           (p) => p.protocol === "http" || p.protocol === "socks5"
         );
-        void pingBatchReal(compat.slice(0, 300));
+        void pingBatchReal(compat);
       } catch (e) {
         notify(String(e));
       }
@@ -1337,7 +1337,7 @@ export default function App() {
                       if (batchPingProgress) {
                         batchPingAbortRef.current = true;
                       } else {
-                        void pingBatchReal(filtered.slice(0, 300));
+                        void pingBatchReal(filtered);
                       }
                     }}
                     title="Mede a latência real (generate_204) no tamanho de lote escolhido"

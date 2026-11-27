@@ -56,12 +56,12 @@ check_url = "https://ipv4.icanhazip.com"
 # total_proxies / max_concurrent_checks * connect_timeout.
 # Raise it to finish sooner, lower it if your network gets unstable mid-run.
 # Automatically capped by the operating system's open-file limit.
-max_concurrent_checks = 768
+max_concurrent_checks = 512
 
 # Total seconds per check, covering the connection and the whole response. A proxy only
 # counts as working if it delivers the entire response within this, so one that connects
 # and then stalls is rejected rather than reported as working. Checks are never retried.
-timeout = 12.0
+timeout = 15.0
 
 # Seconds allowed to connect: reaching the proxy, its handshake and, for an https
 # check_url, the TLS handshake through it. That is most of a check, so a proxy slower
@@ -69,7 +69,7 @@ timeout = 12.0
 # and costs exactly this before being dropped, so this value decides how long a run
 # takes far more than `timeout` does. Lower it to finish sooner and keep only fast
 # proxies, raise it to also keep slow ones.
-connect_timeout = 6.0
+connect_timeout = 8.0
 
 # Sent to check_url. Some sites reject unknown or empty User-Agents.
 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/159.0.0.0 Safari/537.36"

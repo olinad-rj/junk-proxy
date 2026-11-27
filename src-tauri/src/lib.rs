@@ -582,16 +582,41 @@ fn mihomo_traffic_sample_sync() -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn ping_proxy_tcp(host: String, port: u16) -> Result<u64, String> {
+async fn ping_proxy_http(protocol: String, host: String, port: u16) -> Result<u64, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let addr = format!("{host}:{port}");
+        let scheme = match protocol.to_ascii_lowercase().as_str() {
+            "socks5" => "socks5h",
+            "socks4" => "socks4a",
+            _ => "http",
+        };
+        let proxy_url = format!("{scheme}://{host}:{port}");
         let start = std::time::Instant::now();
-        let sock: std::net::SocketAddr = addr
+        let mut cmd = Command::new("curl.exe");
+        cmd.arg("-s")
+            .arg("-o")
+            .arg("NUL")
+            .arg("-w")
+            .arg("%{http_code}")
+            .arg("--max-time")
+            .arg("5")
+            .arg("-x")
+            .arg(&proxy_url)
+            .arg("http://www.gstatic.com/generate_204");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let out = cmd.output().map_err(|e| format!("falha curl: {e}"))?;
+        let code: u16 = String::from_utf8_lossy(&out.stdout)
+            .trim()
             .parse()
-            .map_err(|e| format!("endereço inválido: {e}"))?;
-        TcpStream::connect_timeout(&sock, Duration::from_millis(4000))
-            .map_err(|e| format!("timeout: {e}"))?;
-        Ok(start.elapsed().as_millis() as u64)
+            .unwrap_or(0);
+        if (200..400).contains(&code) {
+            Ok(start.elapsed().as_millis() as u64)
+        } else {
+            Err(format!("falhou (HTTP {code})"))
+        }
     })
     .await
     .map_err(|e| format!("erro interno: {e}"))?
@@ -766,7 +791,7 @@ pub fn run() {
             system_proxy_set,
             mihomo_api,
             mihomo_traffic_sample,
-            ping_proxy_tcp,
+            ping_proxy_http,
             check_exit_ip,
             check_unlock_service,
         ])

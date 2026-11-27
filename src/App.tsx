@@ -679,11 +679,12 @@ export default function App() {
     setLastSelectedIdx(idx);
   };
 
-  const pingScraperTcp = async (p: ScrapedProxy) => {
+  const pingScraperHttp = async (p: ScrapedProxy) => {
     const k = pKey(p);
     setPingingTcp((prev) => (prev.includes(k) ? prev : [...prev, k]));
     try {
-      const ms = await invoke<number>("ping_proxy_tcp", {
+      const ms = await invoke<number>("ping_proxy_http", {
+        protocol: p.protocol,
         host: p.host,
         port: p.port,
       });
@@ -1407,15 +1408,15 @@ export default function App() {
                             </td>
                             <td>
                               {tcpVal === "timeout" ? (
-                                <span className="pill red mono">Timeout</span>
+                                <span className="pill red mono">Falhou</span>
                               ) : typeof tcpVal === "number" ? (
                                 <span
                                   className={`pill mono ${
-                                    tcpVal < 150 ? "green" : tcpVal <= 500 ? "amber" : "red"
+                                    tcpVal < 300 ? "green" : tcpVal <= 1000 ? "amber" : "red"
                                   }`}
-                                  title="Ping TCP direto medido agora"
+                                  title="Ping real generate_204 pelo túnel do proxy"
                                 >
-                                  {tcpVal} ms (TCP)
+                                  {tcpVal} ms
                                 </span>
                               ) : (
                                 <span
@@ -1439,8 +1440,8 @@ export default function App() {
                                 <button
                                   className="btn sm"
                                   disabled={pingingTcp.includes(k)}
-                                  onClick={() => pingScraperTcp(p)}
-                                  title="Medir ping TCP real direto agora"
+                                  onClick={() => pingScraperHttp(p)}
+                                  title="Medir ping real (generate_204) através do proxy"
                                 >
                                   {pingingTcp.includes(k) ? "..." : "Ping"}
                                 </button>

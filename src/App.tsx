@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import appIcon from "./icon.png";
+import { detectSystemLang, Lang, LANG_LABELS, TKey, tr } from "./i18n";
 
 interface ScrapedProxy {
   protocol: string;
@@ -369,6 +370,11 @@ function TrafficChart({
 }
 
 export default function App() {
+  const [lang, setLang] = useState<Lang>(detectSystemLang);
+  const t = useCallback(
+    (key: TKey, vars?: Record<string, string | number>) => tr(lang, key, vars),
+    [lang]
+  );
   const [tab, setTab] = useState<Tab>("home");
   const [toast, setToast] = useState<string | null>(null);
   const [core, setCore] = useState<CoreStatus>({
@@ -1170,7 +1176,7 @@ export default function App() {
             <div className="row" style={{ gap: 5, marginTop: 2 }}>
               <span className={`brand-dot ${core.running ? "on" : ""}`} style={{ width: 7, height: 7 }} />
               <span style={{ fontSize: 10.5, color: "var(--muted)" }}>
-                {core.running ? "Conectado" : "Desconectado"}
+                {core.running ? t("connected") : t("disconnected")}
               </span>
             </div>
           </div>
@@ -1180,13 +1186,13 @@ export default function App() {
           className={`nav-btn ${tab === "home" ? "active" : ""}`}
           onClick={() => setTab("home")}
         >
-          <Home size={16} /> Início
+          <Home size={16} /> {t("nav_home")}
         </button>
         <button
           className={`nav-btn ${tab === "scraper" ? "active" : ""}`}
           onClick={() => setTab("scraper")}
         >
-          <Search size={16} /> Buscador ({proxies.length})
+          <Search size={16} /> {t("nav_scraper")} ({proxies.length})
         </button>
         <button
           className={`nav-btn ${tab === "proxies" ? "active" : ""}`}
@@ -1195,33 +1201,56 @@ export default function App() {
             void refreshMihomoProxies();
           }}
         >
-          <Zap size={16} /> Proxies & Testes
+          <Zap size={16} /> {t("nav_proxies")}
         </button>
         <button
           className={`nav-btn ${tab === "unlock" ? "active" : ""}`}
           onClick={() => setTab("unlock")}
         >
-          <ShieldCheck size={16} /> Desbloqueio
+          <ShieldCheck size={16} /> {t("nav_unlock")}
         </button>
         <button
           className={`nav-btn ${tab === "lists" ? "active" : ""}`}
           onClick={() => setTab("lists")}
         >
-          <List size={16} /> Lista de Proxies{proxyLists.length > 0 ? ` (${proxyLists.length})` : ""}
+          <List size={16} /> {t("nav_lists")}{proxyLists.length > 0 ? ` (${proxyLists.length})` : ""}
         </button>
 
         <div className="side-foot">
-          Porta local: <span className="mono">127.0.0.1:{core.port}</span>
+          {t("local_port")}: <span className="mono">127.0.0.1:{core.port}</span>
           <br />
-          Proxy Windows:{" "}
+          {t("win_proxy")}:{" "}
           <b style={{ color: core.sys_proxy ? "#4ade80" : "var(--muted)" }}>
-            {core.sys_proxy ? "Ativo" : "Desligado"}
+            {core.sys_proxy ? t("active") : t("off")}
           </b>
           <br />
-          Modo TUN:{" "}
+          {t("tun_mode")}:{" "}
           <b style={{ color: tunMode ? "#60a5fa" : "var(--muted)" }}>
-            {tunMode ? "Ativado" : "Desligado"}
+            {tunMode ? t("enabled") : t("off")}
           </b>
+          <div style={{ marginTop: 8 }}>
+            <select
+              className="select"
+              style={{ width: "100%", padding: "4px 6px", fontSize: 11.5 }}
+              value={lang}
+              onChange={(e) => {
+                const next = e.target.value as Lang;
+                setLang(next);
+                try {
+                  localStorage.setItem("junk_lang", next);
+                } catch {
+                  // ignore
+                }
+              }}
+              aria-label={t("lang_label")}
+            >
+              {(Object.keys(LANG_LABELS) as Lang[]).map((code) => (
+                <option key={code} value={code}>
+                  {LANG_LABELS[code]}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </aside>
 
@@ -1229,25 +1258,27 @@ export default function App() {
         <header className="topbar">
           <h1>
             {tab === "home"
-              ? "Painel"
+              ? t("panel_title")
               : tab === "scraper"
-                ? "Buscador de Proxies"
+                ? t("scraper_title")
                 : tab === "proxies"
-                  ? "Proxies & Testes"
-                  : "Teste de Desbloqueio"}
+                  ? t("proxies_title")
+                  : tab === "lists"
+                    ? t("lists_title")
+                    : t("unlock_title")}
           </h1>
           <div className="row">
             {core.running ? (
               <button className="btn danger" onClick={handleDisconnect}>
-                <Power size={15} /> Desconectar
+                <Power size={15} /> {t("disconnect")}
               </button>
             ) : (
               <button className="btn success" onClick={handleQuickConnect}>
-                <Power size={15} /> Conectar
+                <Power size={15} /> {t("connect")}
               </button>
             )}
             <button className="btn" onClick={handleToggleSysProxy}>
-              Proxy do Sistema: {core.sys_proxy ? "ON" : "OFF"}
+              {t("sys_proxy")}: {core.sys_proxy ? "ON" : "OFF"}
             </button>
             <button
               className={`btn ${tunMode ? "primary" : ""}`}
@@ -1276,10 +1307,10 @@ export default function App() {
                     <div className="card-title" style={{ marginBottom: 0 }}>
                       <span className="row" style={{ gap: 6 }}>
                         <MapPin size={14} color="#60a5fa" />
-                        <span>Informações de IP</span>
+                        <span>{t("ip_info")}</span>
                       </span>
                       <button className="btn sm" disabled={checkingIp} onClick={checkExitIp}>
-                        <RefreshCw size={12} /> {checkingIp ? "..." : "Atualizar"}
+                        <RefreshCw size={12} /> {checkingIp ? "..." : t("refresh")}
                       </button>
                     </div>
 
@@ -1321,13 +1352,13 @@ export default function App() {
                               <span>{ipInfo.org || ipInfo.isp || "--"}</span>
                             </div>
                             <div className="ip-row">
-                              <span className="ip-label">Localização:</span>
+                              <span className="ip-label">{t("ip_location")}:</span>
                               <span>
                                 {[ipInfo.city, ipInfo.region].filter(Boolean).join(", ") || "--"}
                               </span>
                             </div>
                             <div className="ip-row">
-                              <span className="ip-label">Fuso horário:</span>
+                              <span className="ip-label">{t("ip_tz")}:</span>
                               <span>{ipInfo.timezone || "--"}</span>
                             </div>
                           </div>
@@ -1349,7 +1380,7 @@ export default function App() {
                               checked={autoIp}
                               onChange={(e) => setAutoIp(e.target.checked)}
                             />
-                            Atualização automática: {autoIp ? `${ipCountdown}s` : "OFF"}
+                            {t("auto_refresh")}: {autoIp ? `${ipCountdown}s` : "OFF"}
                           </label>
                           <span className="mono">
                             {ipInfo.country_code || "--"}
@@ -1358,14 +1389,14 @@ export default function App() {
                               : ""}
                             {" · "}
                             <b style={{ color: ipInfo.via_proxy ? "#4ade80" : "var(--text)" }}>
-                              {ipInfo.via_proxy ? "Via Proxy" : "Direto"}
+                              {ipInfo.via_proxy ? t("via_proxy") : t("direct")}
                             </b>
                           </span>
                         </div>
                       </>
                     ) : (
                       <div style={{ color: "var(--muted)", fontSize: 12.5 }}>
-                        Consultando informações de IP...
+                        {t("consulting_ip")}
                       </div>
                     )}
                   </div>
@@ -1385,7 +1416,7 @@ export default function App() {
                   >
                     <div>
                       <div className="card-title">
-                        <span>Status da Conexão</span>
+                        <span>{t("conn_status")}</span>
                         <span className={`pill ${core.running ? "green" : ""}`}>
                           127.0.0.1:{core.port}
                         </span>
@@ -1396,14 +1427,14 @@ export default function App() {
                             className="big-val"
                             style={{ color: core.running ? "#4ade80" : "var(--muted)" }}
                           >
-                            {core.running ? "Conectado" : "Desconectado"}
+                            {core.running ? t("connected") : t("disconnected")}
                           </div>
                           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                            Nó ativo: <b style={{ color: "var(--text)" }}>{activeGroup?.now || "Nenhum"}</b>
+                            {t("active_node")}: <b style={{ color: "var(--text)" }}>{activeGroup?.now || t("none")}</b>
                           </div>
                         </div>
                         <div className="row" style={{ gap: 6 }}>
-                          <span className="pill blue">{savedProxies.length} salvos</span>
+                          <span className="pill blue">{t("saved_count", { n: savedProxies.length })}</span>
                         </div>
                       </div>
                     </div>
@@ -1417,9 +1448,8 @@ export default function App() {
                         borderTop: "1px solid var(--border)",
                       }}
                     >
-                      <b style={{ color: "var(--text)" }}>Roteamento no Windows:</b>{" "}
-                      <b>Proxy do Sistema</b> redireciona navegadores e apps;{" "}
-                      <b>Modo TUN</b> captura todos os programas (requer Admin).
+                      <b style={{ color: "var(--text)" }}>{t("win_routing")}</b>{" "}
+                      {t("win_routing_desc")}
                     </div>
                   </div>
                 </div>
@@ -1429,10 +1459,10 @@ export default function App() {
                   <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
                     <span className="row" style={{ gap: 6, fontSize: 12, fontWeight: 700 }}>
                       <Plus size={14} color="#60a5fa" />
-                      <span>Adicionar Proxy Personalizado (salva na sua lista permanente)</span>
+                      <span>{t("custom_proxy_title")}</span>
                     </span>
                     <button className="btn sm" onClick={() => setTab("proxies")}>
-                      Ver Salvos ({savedProxies.length})
+                      {t("view_saved", { n: savedProxies.length })}
                     </button>
                   </div>
                   <div className="row">
@@ -1447,7 +1477,7 @@ export default function App() {
                     <input
                       className="input"
                       style={{ flex: 1, minWidth: 200 }}
-                      placeholder="Ex: 1.2.3.4:8080 ou socks5://user:pass@1.2.3.4:1080"
+                      placeholder={t("custom_proxy_ph")}
                       value={customProxyInput}
                       onChange={(e) => setCustomProxyInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -1455,10 +1485,10 @@ export default function App() {
                       }}
                     />
                     <button className="btn" onClick={() => handleAddCustomProxy(false)}>
-                      <Bookmark size={13} /> Salvar
+                      <Bookmark size={13} /> {t("save")}
                     </button>
                     <button className="btn primary" onClick={() => handleAddCustomProxy(true)}>
-                      <Plus size={13} /> Salvar + Fallback
+                      <Plus size={13} /> {t("save_fallback")}
                     </button>
                   </div>
                 </div>
@@ -1480,14 +1510,14 @@ export default function App() {
                       >
                         <Gauge size={14} color="#f59e0b" />
                       </span>
-                      <b>Estatísticas de tráfego</b>
+                      <b>{t("traffic_stats")}</b>
                     </span>
                     <div className="row" style={{ gap: 14, textTransform: "none", fontSize: 11.5 }}>
                       <span style={{ color: "#f59e0b", fontWeight: 600 }}>
-                        Envio: <span className="mono">{fmtSpeed(currentTraffic.up)}</span> ({fmtBytes(totalBytes.up)})
+                        {t("upload")}: <span className="mono">{fmtSpeed(currentTraffic.up)}</span> ({fmtBytes(totalBytes.up)})
                       </span>
                       <span style={{ color: "#3b82f6", fontWeight: 600 }}>
-                        Recebimento: <span className="mono">{fmtSpeed(currentTraffic.down)}</span> ({fmtBytes(totalBytes.down)})
+                        {t("download")}: <span className="mono">{fmtSpeed(currentTraffic.down)}</span> ({fmtBytes(totalBytes.down)})
                       </span>
                     </div>
                   </div>
@@ -1505,11 +1535,11 @@ export default function App() {
                   >
                     <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
                       <span className="pill" style={{ fontSize: 10.5, padding: "2px 8px" }}>
-                        Tempo real
+                        {t("realtime")}
                       </span>
                       <div className="row" style={{ gap: 10, fontSize: 11, fontWeight: 600 }}>
-                        <span style={{ color: "#f59e0b" }}>Envio</span>
-                        <span style={{ color: "#3b82f6" }}>Recebimento</span>
+                        <span style={{ color: "#f59e0b" }}>{t("upload")}</span>
+                        <span style={{ color: "#3b82f6" }}>{t("download")}</span>
                       </div>
                     </div>
 
@@ -1524,8 +1554,8 @@ export default function App() {
                         marginTop: 2,
                       }}
                     >
-                      <span>Pontos: {traffic.length} | Intervalo: 1s</span>
-                      <span>60 FPS · Suave</span>
+                      <span>{t("points_interval", { n: traffic.length })}</span>
+                      <span>{t("smooth_fps")}</span>
                     </div>
                   </div>
                 </div>
@@ -1542,22 +1572,22 @@ export default function App() {
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <div className="row" style={{ gap: 6 }}>
                     <Shield size={15} color="#60a5fa" />
-                    <b>Fila do Fallback ({fallbackQueue.length})</b>
+                    <b>{t("fallback_queue", { n: fallbackQueue.length })}</b>
                   </div>
                   {fallbackQueue.length > 0 && (
                     <button className="btn sm" onClick={() => setFallbackQueue([])}>
-                      Limpar
+                      {t("clear")}
                     </button>
                   )}
                 </div>
                 <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
-                  Arraste para reordenar (#1 é o principal; se cair, passa para o #2).
+                  {t("fallback_hint")}
                 </div>
 
                 <div className="fb-list" ref={fbListRef}>
                   {fallbackQueue.length === 0 ? (
                     <div style={{ color: "var(--muted)", fontSize: 12, padding: "18px 6px", textAlign: "center" }}>
-                      Adicione um proxy personalizado acima ou envie proxies do <b>Buscador</b> / <b>Salvos</b> para cá.
+                      {t("fallback_empty_home")}
                     </div>
                   ) : (
                     fallbackQueue.map((p, idx) => (
@@ -1605,7 +1635,7 @@ export default function App() {
                   disabled={fallbackQueue.length === 0}
                   onClick={() => startWithProxies(fallbackQueue, "Fallback", "fallback")}
                 >
-                  <Power size={14} /> Aplicar / Conectar ({fallbackQueue.length})
+                  <Power size={14} /> {t("apply_connect", { n: fallbackQueue.length })}
                 </button>
               </aside>
             </div>
@@ -1622,7 +1652,7 @@ export default function App() {
                       className="btn danger"
                       onClick={() => invoke("scraper_stop").then(() => setScraping(false))}
                     >
-                      <Square size={14} /> Parar Coleta
+                      <Square size={14} /> {t("stop_scrape")}
                     </button>
                   ) : (
                     <button
@@ -1641,7 +1671,7 @@ export default function App() {
                         });
                       }}
                     >
-                      <Play size={14} /> Buscar Proxies
+                      <Play size={14} /> {t("start_scrape")}
                     </button>
                   )}
                   <button
@@ -1651,8 +1681,8 @@ export default function App() {
                   >
                     <Shield size={14} />{" "}
                     {selected.length > 0
-                      ? `Usar Selecionados em Fallback (${selected.length})`
-                      : "Usar Todos em Fallback"}
+                      ? t("use_selected_fb", { n: selected.length })
+                      : t("use_all_fb")}
                   </button>
                   <select
                     className="select"
@@ -1663,12 +1693,11 @@ export default function App() {
                       setPingBatchSize(v);
                       pingBatchSizeRef.current = v;
                     }}
-                    title="Quantidade de proxies testados por vez no ping real"
                   >
-                    <option value={10}>10 por vez</option>
-                    <option value={20}>20 por vez</option>
-                    <option value={30}>30 por vez</option>
-                    <option value={50}>50 por vez</option>
+                    <option value={10}>{t("per_batch", { n: 10 })}</option>
+                    <option value={20}>{t("per_batch", { n: 20 })}</option>
+                    <option value={30}>{t("per_batch", { n: 30 })}</option>
+                    <option value={50}>{t("per_batch", { n: 50 })}</option>
                   </select>
                   <button
                     className={`btn ${batchPingProgress ? "danger" : ""}`}
@@ -1680,12 +1709,11 @@ export default function App() {
                         void pingBatchReal(filtered);
                       }
                     }}
-                    title="Mede a latência real (generate_204) no tamanho de lote escolhido"
                   >
                     <Zap size={14} />{" "}
                     {batchPingProgress
-                      ? `Parar Ping (${batchPingProgress.done}/${batchPingProgress.total})`
-                      : `Ping Real ${pingBatchSize}x`}
+                      ? t("stop_ping", { done: batchPingProgress.done, total: batchPingProgress.total })
+                      : t("real_ping", { n: pingBatchSize })}
                   </button>
                   <button
                     className="btn"
@@ -1697,10 +1725,9 @@ export default function App() {
                           : compatVisible;
                       saveProxies(items);
                     }}
-                    title="Salvar proxies selecionados (ou visíveis) na lista permanente"
                   >
                     <Bookmark size={14} />{" "}
-                    {selected.length > 0 ? `Salvar (${selected.length})` : "Salvar Working"}
+                    {selected.length > 0 ? t("save_n", { n: selected.length }) : t("save_working")}
                   </button>
                   <button
                     className="btn"
@@ -1709,9 +1736,8 @@ export default function App() {
                       setNewListName(`Lista ${proxyLists.length + 1}`);
                       setCreateListOpen(true);
                     }}
-                    title="Criar uma nova lista em Lista de Proxies com os itens marcados"
                   >
-                    <Plus size={14} /> Criar lista de selecionados ({selected.length})
+                    <Plus size={14} /> {t("create_list_sel", { n: selected.length })}
                   </button>
                   <button
                     className="btn"
@@ -1730,14 +1756,13 @@ export default function App() {
                       setProxies([]);
                       setSelected([]);
                       setTcpPings({});
-                      notify("Lista do buscador limpa");
                     }}
                   >
-                    <Trash2 size={14} /> Limpar Lista
+                    <Trash2 size={14} /> {t("clear_list")}
                   </button>
                 </div>
                 <span className="pill blue">
-                  Mostrando {filtered.length} de {proxies.length}
+                  {t("showing_of", { a: filtered.length, b: proxies.length })}
                 </span>
               </div>
 
@@ -1745,19 +1770,19 @@ export default function App() {
                 <input
                   className="input"
                   style={{ flex: 1, minWidth: 160 }}
-                  placeholder="Buscar IP, porta ou país..."
+                  placeholder={t("search_ph")}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
                 <select className="select" value={proto} onChange={(e) => setProto(e.target.value)}>
                   <option value="compat">HTTP + SOCKS5</option>
-                  <option value="all">Todos</option>
+                  <option value="all">{t("all")}</option>
                   <option value="http">HTTP</option>
                   <option value="socks5">SOCKS5</option>
                   <option value="socks4">SOCKS4</option>
                 </select>
                 <select className="select" value={country} onChange={(e) => setCountry(e.target.value)}>
-                  <option value="all">Todos países ({countries.length})</option>
+                  <option value="all">{t("all_countries", { n: countries.length })}</option>
                   {countries.map(([c, info]) => (
                     <option key={c} value={c}>
                       [{c}] {info.name} ({info.count})
@@ -1769,7 +1794,7 @@ export default function App() {
                   style={{ width: 115 }}
                   type="number"
                   list="ping-presets"
-                  placeholder="Máx ms"
+                  placeholder={t("max_ms")}
                   value={maxMs}
                   onChange={(e) => setMaxMs(e.target.value)}
                 />
@@ -1790,8 +1815,8 @@ export default function App() {
                   value={strategy}
                   onChange={(e) => setStrategy(e.target.value as "fallback" | "url-test")}
                 >
-                  <option value="fallback">Modo: Fallback (troca se cair)</option>
-                  <option value="url-test">Modo: Mais Rápido (menor ping)</option>
+                  <option value="fallback">{t("mode_fallback")}</option>
+                  <option value="url-test">{t("mode_fastest")}</option>
                 </select>
                 <label className="row" style={{ gap: 5, cursor: "pointer" }}>
                   <input
@@ -1799,7 +1824,7 @@ export default function App() {
                     checked={hideTransparent}
                     onChange={(e) => setHideTransparent(e.target.checked)}
                   />
-                  Anti-Transparente
+                  {t("anti_transparent")}
                 </label>
                 <label className="row" style={{ gap: 5, cursor: "pointer" }}>
                   <input
@@ -1819,7 +1844,7 @@ export default function App() {
                 </label>
                 {selected.length > 0 && (
                   <button className="btn sm" onClick={() => setSelected([])}>
-                    Limpar seleção ({selected.length})
+                    {t("clear_selection", { n: selected.length })}
                   </button>
                 )}
               </div>
@@ -1859,10 +1884,10 @@ export default function App() {
                           }}
                           title="Ordenar por país"
                         >
-                          País {sortCol === "country" ? (sortDir === "asc" ? "▲" : "▼") : ""}
+                          {t("col_country")} {sortCol === "country" ? (sortDir === "asc" ? "▲" : "▼") : ""}
                         </th>
-                        <th>Endereço</th>
-                        <th>Protocolo</th>
+                        <th>{t("col_address")}</th>
+                        <th>{t("col_protocol")}</th>
                         <th
                           style={{ cursor: "pointer", userSelect: "none" }}
                           onClick={() => {
@@ -1873,11 +1898,10 @@ export default function App() {
                               setSortDir("asc");
                             }
                           }}
-                          title="Ordenar por latência real"
                         >
-                          Latência {sortCol === "ping" ? (sortDir === "asc" ? "▲" : "▼") : ""}
+                          {t("col_latency")} {sortCol === "ping" ? (sortDir === "asc" ? "▲" : "▼") : ""}
                         </th>
-                        <th style={{ textAlign: "right" }}>Ações</th>
+                        <th style={{ textAlign: "right" }}>{t("col_actions")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1914,7 +1938,7 @@ export default function App() {
                             <td>
                               <div className="row" style={{ gap: 7, flexWrap: "nowrap" }}>
                                 <FlagBadge code={p.country_code} />
-                                <span>{p.country_name || p.country_code || "Desconhecido"}</span>
+                                <span>{p.country_name || p.country_code || t("unknown")}</span>
                               </div>
                             </td>
                             <td className="mono">
@@ -1927,7 +1951,7 @@ export default function App() {
                             </td>
                             <td>
                               {tcpVal === "timeout" ? (
-                                <span className="pill red mono">Falhou</span>
+                                <span className="pill red mono">{t("failed")}</span>
                               ) : typeof tcpVal === "number" ? (
                                 <span
                                   className={`pill mono ${
@@ -1969,7 +1993,7 @@ export default function App() {
                                   disabled={!ok}
                                   onClick={() => startWithProxies([p], `${p.host}:${p.port}`)}
                                 >
-                                  Usar
+                                  {t("use")}
                                 </button>
                                 <button
                                   className="btn sm"
@@ -2007,7 +2031,10 @@ export default function App() {
                     onClick={() => setLogsOpen((v) => !v)}
                   >
                     <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                      Log da Coleta ({logs.length} linhas) — {logsOpen ? "recolher" : "expandir"}
+                      {t("logs_title", {
+                        n: logs.length,
+                        state: logsOpen ? t("collapse") : t("expand"),
+                      })}
                     </span>
                     {logs.length > 0 && (
                       <div className="row" style={{ gap: 6 }}>
@@ -2019,7 +2046,7 @@ export default function App() {
                             notify("Logs copiados!");
                           }}
                         >
-                          <Copy size={12} /> Copiar
+                          <Copy size={12} /> {t("copy")}
                         </button>
                         <button
                           className="btn sm"
@@ -2028,14 +2055,14 @@ export default function App() {
                             setLogs([]);
                           }}
                         >
-                          Limpar
+                          {t("clear")}
                         </button>
                       </div>
                     )}
                   </div>
                   {logsOpen && (
                     <div ref={logRef} className="log-box" style={{ marginTop: 8 }}>
-                      {logs.length === 0 ? "Aguardando coleta..." : logs.join("\n")}
+                      {logs.length === 0 ? t("waiting_scrape") : logs.join("\n")}
                     </div>
                   )}
                 </div>
@@ -2052,22 +2079,22 @@ export default function App() {
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <div className="row" style={{ gap: 6 }}>
                     <Shield size={15} color="#60a5fa" />
-                    <b>Fila do Fallback ({fallbackQueue.length})</b>
+                    <b>{t("fallback_queue", { n: fallbackQueue.length })}</b>
                   </div>
                   {fallbackQueue.length > 0 && (
                     <button className="btn sm" onClick={() => setFallbackQueue([])}>
-                      Limpar
+                      {t("clear")}
                     </button>
                   )}
                 </div>
                 <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
-                  Arraste os itens para reordenar (#1 é o principal; se cair, passa para o #2).
+                  {t("fallback_hint")}
                 </div>
 
                 <div className="fb-list" ref={fbListRef}>
                   {fallbackQueue.length === 0 ? (
                     <div style={{ color: "var(--muted)", fontSize: 12, padding: "18px 6px", textAlign: "center" }}>
-                      Marque os proxies à esquerda e clique em <b>Usar Selecionados em Fallback</b> para montar e arrastar a fila aqui.
+                      {t("fallback_empty_scraper")}
                     </div>
                   ) : (
                     fallbackQueue.map((p, idx) => (
@@ -2115,7 +2142,7 @@ export default function App() {
                   disabled={fallbackQueue.length === 0}
                   onClick={() => startWithProxies(fallbackQueue, "Fallback Reordenado", "fallback")}
                 >
-                  <Power size={14} /> Aplicar Ordem ({fallbackQueue.length})
+                  <Power size={14} /> {t("apply_order", { n: fallbackQueue.length })}
                 </button>
               </aside>
             </div>
@@ -2129,9 +2156,9 @@ export default function App() {
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <div className="row" style={{ gap: 8 }}>
                   <Bookmark size={15} color="#60a5fa" />
-                  <b>Meus Proxies Salvos ({savedProxies.length})</b>
+                  <b>{t("saved_proxies_title", { n: savedProxies.length })}</b>
                   <span style={{ fontSize: 11.5, color: "var(--muted)" }}>
-                    Persistidos em disco · reteste sem buscar
+                    {t("saved_proxies_sub")}
                   </span>
                 </div>
                 <div className="row" style={{ gap: 6 }}>
@@ -2145,10 +2172,10 @@ export default function App() {
                       pingBatchSizeRef.current = v;
                     }}
                   >
-                    <option value={10}>10 por vez</option>
-                    <option value={20}>20 por vez</option>
-                    <option value={30}>30 por vez</option>
-                    <option value={50}>50 por vez</option>
+                    <option value={10}>{t("per_batch", { n: 10 })}</option>
+                    <option value={20}>{t("per_batch", { n: 20 })}</option>
+                    <option value={30}>{t("per_batch", { n: 30 })}</option>
+                    <option value={50}>{t("per_batch", { n: 50 })}</option>
                   </select>
                   <button
                     className={`btn ${batchPingProgress ? "danger" : "primary"}`}
@@ -2163,8 +2190,8 @@ export default function App() {
                   >
                     <Zap size={14} />{" "}
                     {batchPingProgress
-                      ? `Parar (${batchPingProgress.done}/${batchPingProgress.total})`
-                      : "Retestar Ping Real (sem buscar)"}
+                      ? t("stop_n", { done: batchPingProgress.done, total: batchPingProgress.total })
+                      : t("retest_real_ping")}
                   </button>
                   <button
                     className="btn danger"
@@ -2183,14 +2210,14 @@ export default function App() {
                       notify(`${removed} proxy(s) que falharam removido(s)`);
                     }}
                   >
-                    <Trash2 size={14} /> Apagar Falhos
+                    <Trash2 size={14} /> {t("delete_failed")}
                   </button>
                   <button
                     className="btn success"
                     disabled={savedProxies.length === 0}
                     onClick={() => startWithProxies(savedProxies, "Salvos", strategy)}
                   >
-                    <Power size={14} /> Conectar Salvos
+                    <Power size={14} /> {t("connect_saved")}
                   </button>
                 </div>
               </div>
@@ -2207,7 +2234,7 @@ export default function App() {
                 <input
                   className="input"
                   style={{ flex: 1, minWidth: 200 }}
-                  placeholder="Adicionar proxy personalizado: ip:porta ou socks5://user:pass@ip:porta"
+                  placeholder={t("custom_proxy_ph")}
                   value={customProxyInput}
                   onChange={(e) => setCustomProxyInput(e.target.value)}
                   onKeyDown={(e) => {
@@ -2215,10 +2242,10 @@ export default function App() {
                   }}
                 />
                 <button className="btn" onClick={() => handleAddCustomProxy(false)}>
-                  <Plus size={13} /> Adicionar
+                  <Plus size={13} /> {t("add")}
                 </button>
                 <button className="btn primary" onClick={() => handleAddCustomProxy(true)}>
-                  <Plus size={13} /> Adicionar + Fallback
+                  <Plus size={13} /> {t("add_fallback")}
                 </button>
               </div>
 
@@ -2226,18 +2253,18 @@ export default function App() {
                 <table>
                   <thead>
                     <tr>
-                      <th>País</th>
-                      <th>Endereço</th>
-                      <th>Protocolo</th>
-                      <th>Ping Real</th>
-                      <th style={{ textAlign: "right" }}>Ações</th>
+                      <th>{t("col_country")}</th>
+                      <th>{t("col_address")}</th>
+                      <th>{t("col_protocol")}</th>
+                      <th>{t("col_latency")}</th>
+                      <th style={{ textAlign: "right" }}>{t("col_actions")}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {savedProxies.length === 0 ? (
                       <tr>
                         <td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: 20 }}>
-                          Nenhum proxy salvo ainda. Adicione um proxy personalizado acima ou salve proxies no <b>Buscador</b>.
+                          {t("empty_saved")}
                         </td>
                       </tr>
                     ) : (
@@ -2249,7 +2276,7 @@ export default function App() {
                             <td>
                               <div className="row" style={{ gap: 7, flexWrap: "nowrap" }}>
                                 <FlagBadge code={p.country_code} />
-                                <span>{p.country_name || p.country_code || "Personalizado"}</span>
+                                <span>{p.country_name || p.country_code || t("custom_label")}</span>
                               </div>
                             </td>
                             <td className="mono">
@@ -2263,7 +2290,7 @@ export default function App() {
                             </td>
                             <td className="mono">
                               {val === "timeout" ? (
-                                <span className="pill red">Falhou</span>
+                                <span className="pill red">{t("failed")}</span>
                               ) : typeof val === "number" ? (
                                 <span className={`pill ${val < 300 ? "green" : val <= 1000 ? "amber" : "red"}`}>
                                   {val} ms
@@ -2287,7 +2314,7 @@ export default function App() {
                                     setFallbackQueue((prev) =>
                                       prev.some((x) => pKey(x) === k) ? prev : [...prev, p]
                                     );
-                                    notify(`Adicionado ao Fallback: ${p.host}:${p.port}`);
+                                    notify(`+ Fallback: ${p.host}:${p.port}`);
                                   }}
                                 >
                                   + Fallback
@@ -2296,12 +2323,11 @@ export default function App() {
                                   className="btn sm success"
                                   onClick={() => startWithProxies([p], `${p.host}:${p.port}`)}
                                 >
-                                  Usar
+                                  {t("use")}
                                 </button>
                                 <button
                                   className="btn sm"
                                   onClick={() => removeSavedProxy(k)}
-                                  title="Remover dos salvos"
                                 >
                                   <Trash2 size={12} />
                                 </button>
@@ -2321,7 +2347,7 @@ export default function App() {
               <div className="row">
                 <Globe size={16} />
                 <span>
-                  Mihomo ativo: <b>{activeGroup?.now || "Desconectado"}</b>
+                  {t("mihomo_active")} <b>{activeGroup?.now || t("disconnected")}</b>
                 </span>
               </div>
               <div className="row">
@@ -2330,7 +2356,7 @@ export default function App() {
                   disabled={!core.running || testingAll}
                   onClick={testAllNodes}
                 >
-                  <Zap size={14} /> {testingAll ? "Testando..." : "Testar Latência (Mihomo)"}
+                  <Zap size={14} /> {testingAll ? t("testing") : t("test_mihomo")}
                 </button>
                 <button
                   className="btn"
@@ -2338,10 +2364,9 @@ export default function App() {
                   onClick={async () => {
                     await handleDisconnect();
                     setNodeDelays({});
-                    notify("Lista de proxies limpa");
                   }}
                 >
-                  <Trash2 size={14} /> Limpar Lista
+                  <Trash2 size={14} /> {t("clear_list")}
                 </button>
                 <button className="btn" onClick={refreshMihomoProxies}>
                   <RefreshCw size={14} />
@@ -2353,10 +2378,10 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
-                    <th>Nó / Grupo</th>
-                    <th>Tipo</th>
-                    <th>Ping Atual (Mihomo)</th>
-                    <th style={{ textAlign: "right" }}>Ação</th>
+                    <th>{t("col_node")}</th>
+                    <th>{t("col_type")}</th>
+                    <th>{t("col_mihomo_ping")}</th>
+                    <th style={{ textAlign: "right" }}>{t("col_actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2432,16 +2457,16 @@ export default function App() {
         {tab === "unlock" && (
           <div className="content">
             <div className="row" style={{ justifyContent: "space-between" }}>
-              <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
-                Testa acesso aos serviços {core.running ? "pelo proxy ativo" : "(direto — conecte um proxy para testar via proxy)"}.
-              </span>
-              <button
-                className="btn primary"
-                disabled={testingUnlockAll}
-                onClick={testAllUnlock}
-              >
-                <RefreshCw size={14} /> {testingUnlockAll ? "Testando..." : "Testar tudo"}
-              </button>
+                <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
+                  {core.running ? t("unlock_desc_proxy") : t("unlock_desc_direct")}
+                </span>
+                <button
+                  className="btn primary"
+                  disabled={testingUnlockAll}
+                  onClick={testAllUnlock}
+                >
+                  <RefreshCw size={14} /> {testingUnlockAll ? t("testing") : t("test_all")}
+                </button>
             </div>
 
             <div className="grid3">
@@ -2494,7 +2519,7 @@ export default function App() {
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <div className="row" style={{ gap: 8 }}>
                   <List size={16} color="#60a5fa" />
-                  <b>Listas de Proxies</b>
+                  <b>{t("lists_header")}</b>
                   <select
                     className="select"
                     value={activeProxyList?.id || ""}
@@ -2502,7 +2527,7 @@ export default function App() {
                     disabled={proxyLists.length === 0}
                   >
                     {proxyLists.length === 0 ? (
-                      <option value="">Nenhuma lista criada</option>
+                      <option value="">{t("no_list_created")}</option>
                     ) : (
                       proxyLists.map((l) => (
                         <option key={l.id} value={l.id}>
@@ -2516,11 +2541,9 @@ export default function App() {
                       className="btn sm danger"
                       onClick={() => {
                         setProxyLists((prev) => prev.filter((l) => l.id !== activeProxyList.id));
-                        notify(`Lista "${activeProxyList.name}" removida`);
                       }}
-                      title="Excluir lista atual"
                     >
-                      <Trash2 size={12} /> Excluir Lista
+                      <Trash2 size={12} /> {t("delete_list")}
                     </button>
                   )}
                 </div>
@@ -2535,10 +2558,10 @@ export default function App() {
                       pingBatchSizeRef.current = v;
                     }}
                   >
-                    <option value={10}>10 por vez</option>
-                    <option value={20}>20 por vez</option>
-                    <option value={30}>30 por vez</option>
-                    <option value={50}>50 por vez</option>
+                    <option value={10}>{t("per_batch", { n: 10 })}</option>
+                    <option value={20}>{t("per_batch", { n: 20 })}</option>
+                    <option value={30}>{t("per_batch", { n: 30 })}</option>
+                    <option value={50}>{t("per_batch", { n: 50 })}</option>
                   </select>
                   <button
                     className={`btn ${batchPingProgress ? "danger" : "primary"}`}
@@ -2553,8 +2576,8 @@ export default function App() {
                   >
                     <Zap size={14} />{" "}
                     {batchPingProgress
-                      ? `Parar Ping (${batchPingProgress.done}/${batchPingProgress.total})`
-                      : "Ping Real"}
+                      ? t("stop_ping", { done: batchPingProgress.done, total: batchPingProgress.total })
+                      : t("real_ping_btn")}
                   </button>
                 </div>
               </div>
@@ -2566,18 +2589,12 @@ export default function App() {
                     disabled={!activeProxyList || activeProxyList.proxies.length === 0}
                     onClick={() => {
                       if (!activeProxyList) return;
-                      let removed = 0;
                       updateActiveListProxies((prev) =>
-                        prev.filter((p) => {
-                          const fail = tcpPings[pKey(p)] === "timeout";
-                          if (fail) removed++;
-                          return !fail;
-                        })
+                        prev.filter((p) => tcpPings[pKey(p)] !== "timeout")
                       );
-                      notify(`${removed} proxy(s) que falharam apagado(s)`);
                     }}
                   >
-                    <Trash2 size={12} /> Apagar Falhos
+                    <Trash2 size={12} /> {t("delete_failed")}
                   </button>
                   <input
                     className="input"
@@ -2585,8 +2602,7 @@ export default function App() {
                     type="number"
                     value={listMaxMs}
                     onChange={(e) => setListMaxMs(e.target.value)}
-                    placeholder="Máx ms"
-                    title="Limite em ms para apagar proxies lentos"
+                    placeholder={t("max_ms")}
                   />
                   <button
                     className="btn sm"
@@ -2594,24 +2610,17 @@ export default function App() {
                     onClick={() => {
                       if (!activeProxyList) return;
                       const limit = Number(listMaxMs);
-                      if (!Number.isFinite(limit) || limit <= 0) {
-                        notify("Informe um limite em ms válido");
-                        return;
-                      }
-                      let removed = 0;
+                      if (!Number.isFinite(limit) || limit <= 0) return;
                       updateActiveListProxies((prev) =>
                         prev.filter((p) => {
                           const real = tcpPings[pKey(p)];
                           const ms = typeof real === "number" ? real : p.timeout;
-                          const tooSlow = typeof ms === "number" && ms > limit;
-                          if (tooSlow) removed++;
-                          return !tooSlow;
+                          return !(typeof ms === "number" && ms > limit);
                         })
                       );
-                      notify(`${removed} proxy(s) acima de ${limit} ms apagado(s)`);
                     }}
                   >
-                    <Trash2 size={12} /> Apagar &gt; {listMaxMs || "500"} ms
+                    <Trash2 size={12} /> {t("delete_over_ms", { ms: listMaxMs || "500" })}
                   </button>
                 </div>
 
@@ -2622,10 +2631,9 @@ export default function App() {
                     onClick={() => {
                       if (!activeProxyList) return;
                       setFallbackQueue(activeProxyList.proxies.slice(0, 300));
-                      notify(`Lista "${activeProxyList.name}" enviada para o Fallback`);
                     }}
                   >
-                    <Shield size={12} /> Enviar para Fallback
+                    <Shield size={12} /> {t("send_to_fb")}
                   </button>
                   <button
                     className="btn sm success"
@@ -2635,7 +2643,7 @@ export default function App() {
                       void startWithProxies(activeProxyList.proxies, activeProxyList.name, strategy);
                     }}
                   >
-                    <Power size={12} /> Conectar Lista
+                    <Power size={12} /> {t("connect_list")}
                   </button>
                 </div>
               </div>
@@ -2645,20 +2653,18 @@ export default function App() {
               <table>
                 <thead>
                   <tr>
-                    <th>País</th>
-                    <th>Endereço</th>
-                    <th>Protocolo</th>
-                    <th>Ping Real</th>
-                    <th style={{ textAlign: "right" }}>Ações</th>
+                    <th>{t("col_country")}</th>
+                    <th>{t("col_address")}</th>
+                    <th>{t("col_protocol")}</th>
+                    <th>{t("col_latency")}</th>
+                    <th style={{ textAlign: "right" }}>{t("col_actions")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {!activeProxyList || activeProxyList.proxies.length === 0 ? (
                     <tr>
                       <td colSpan={5} style={{ textAlign: "center", color: "var(--muted)", padding: 24 }}>
-                        {proxyLists.length === 0
-                          ? "Nenhuma lista criada. Selecione proxies no Buscador e clique em 'Criar lista de selecionados'."
-                          : "Esta lista está vazia."}
+                        {proxyLists.length === 0 ? t("empty_lists_hint") : t("empty_this_list")}
                       </td>
                     </tr>
                   ) : (
@@ -2670,7 +2676,7 @@ export default function App() {
                           <td>
                             <div className="row" style={{ gap: 7, flexWrap: "nowrap" }}>
                               <FlagBadge code={p.country_code} />
-                              <span>{p.country_name || p.country_code || "Desconhecido"}</span>
+                              <span>{p.country_name || p.country_code || t("unknown")}</span>
                             </div>
                           </td>
                           <td className="mono">
@@ -2683,7 +2689,7 @@ export default function App() {
                           </td>
                           <td className="mono">
                             {val === "timeout" ? (
-                              <span className="pill red">Falhou</span>
+                              <span className="pill red">{t("failed")}</span>
                             ) : typeof val === "number" ? (
                               <span className={`pill ${val < 300 ? "green" : val <= 1000 ? "amber" : "red"}`}>
                                 {val} ms
@@ -2705,7 +2711,7 @@ export default function App() {
                                 className="btn sm success"
                                 onClick={() => startWithProxies([p], `${p.host}:${p.port}`)}
                               >
-                                Usar
+                                {t("use")}
                               </button>
                               <button
                                 className="btn sm"
@@ -2730,11 +2736,11 @@ export default function App() {
       {createListOpen && (
         <div className="modal-bg" onClick={() => setCreateListOpen(false)}>
           <div className="modal" style={{ width: "min(420px, 92vw)" }} onClick={(e) => e.stopPropagation()}>
-            <b>Criar lista com {selected.length} proxy(s) selecionado(s)</b>
+            <b>{t("create_list_title", { n: selected.length })}</b>
             <input
               className="input"
               autoFocus
-              placeholder="Nome da lista..."
+              placeholder={t("list_name_ph")}
               value={newListName}
               onChange={(e) => setNewListName(e.target.value)}
               onKeyDown={(e) => {
@@ -2746,13 +2752,12 @@ export default function App() {
                   setActiveListId(id);
                   setCreateListOpen(false);
                   setTab("lists");
-                  notify(`Lista "${name}" criada com ${items.length} proxy(s)`);
                 }
               }}
             />
             <div className="row" style={{ justifyContent: "flex-end" }}>
               <button className="btn" onClick={() => setCreateListOpen(false)}>
-                Cancelar
+                {t("cancel")}
               </button>
               <button
                 className="btn primary"
@@ -2764,10 +2769,9 @@ export default function App() {
                   setActiveListId(id);
                   setCreateListOpen(false);
                   setTab("lists");
-                  notify(`Lista "${name}" criada com ${items.length} proxy(s)`);
                 }}
               >
-                Criar Lista
+                {t("create_list_btn")}
               </button>
             </div>
           </div>
